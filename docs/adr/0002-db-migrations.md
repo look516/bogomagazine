@@ -36,7 +36,7 @@
 | 같은 번호의 V 파일 두 개 | 〃 |
 | 번호가 더 작은 V 파일을 뒤늦게 추가 | 〃 (기존 DB에서 적용이 거부되기 때문) |
 | 파일 이름 오타 | 〃 + `FLYWAY_VALIDATE_MIGRATION_NAMING` |
-| Windows 줄바꿈(CRLF)으로 체크섬이 달라짐 | `.gitattributes` 로 LF 고정 |
+| 셸 스크립트/훅이 CRLF 가 되어 Linux CI 에서만 실패 (`set: pipefail: invalid option name`, 재현 확인) | `.gitattributes` 로 LF 고정. 참고: Flyway 체크섬은 줄바꿈과 무관함을 확인했다 (CRLF 사본으로 validate 통과) |
 | 새 테이블에 소유 모듈을 안 적음 | `db/tests/architecture.sql` T90 |
 
 ## 큰 테이블에 인덱스를 추가할 때 (실제로 겪은 함정)
