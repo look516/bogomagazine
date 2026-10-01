@@ -60,10 +60,10 @@ for kind, name, mod, body in objs:
             rows.append((mod, kind, name, o[2], other + "()", "호출"))
             edges[(mod, o[2])].add(f"{name}→{other}()")
 
-ALLOWED = {("groups","identity"),("issues","identity"),("issues","groups"),("issues","templates"),
-           ("intake","identity"),("intake","issues"),("layout","issues"),("layout","templates"),("layout","intake"),
-           ("review","identity"),("review","issues"),("review","layout"),
-           ("printing","identity"),("printing","issues"),("printing","layout")}
+# 허용된 모듈 간 의존은 db/tests/architecture.sql 의 allowed_dep 가 단일 기준이다 (여기에 따로 적지 않는다)
+_arch = open(os.path.join(ROOT, "db", "tests", "architecture.sql"), encoding="utf-8").read()
+_block = re.search(r"INSERT INTO allowed_dep VALUES(.*?);", _arch, re.S).group(1)
+ALLOWED = set(re.findall(r"\('([a-z]+)',\s*'([a-z]+)'\)", _block))
 
 print(f"분석한 오브젝트: 함수 {sum(1 for o in objs if o[0]=='function')}개, 뷰 {sum(1 for o in objs if o[0]=='view')}개\n")
 print("=== 함수/뷰 수준 모듈 간 의존 (외래키 허용 방향 기준)")

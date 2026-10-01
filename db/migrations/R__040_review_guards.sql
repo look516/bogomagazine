@@ -81,21 +81,28 @@ CREATE TRIGGER trg_override_guard BEFORE INSERT ON override
     FOR EACH ROW EXECUTE FUNCTION override_guard();
 
 -- =========================================================
--- 6. 정합성 가드: 코멘트의 호와 코멘트가 달린 페이지의 호가 같아야 한다
---    (page 는 호를 직접 갖지 않고 조판을 거쳐 호에 이어지므로 외래키로 표현할 수 없다)
+-- 5. 정합성 가드: 승인/수정의 작성자는 그 호의 그룹에서 활동 중인 구성원이어야 한다
+--    (누가 승인할 수 있는지의 정책은 TODO.md 의 "다중 승인 정책"에서 정한다. 여기서는 그룹 밖 사람만 막는다)
+--    TG_ARGV[0] = 작성자 컬럼 이름 (approval: user_id, override: author_id)
 -- =========================================================
-CREATE OR REPLACE FUNCTION guard_comment_page_issue() RETURNS trigger
+CREATE OR REPLACE FUNCTION guard_review_author() RETURNS trigger
 LANGUAGE plpgsql AS $$
+DECLARE
+    v_group uuid;
+    v_user  uuid := (to_jsonb(NEW) ->> TG_ARGV[0])::uuid;
 BEGIN
-    IF NEW.page_id IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM page pg JOIN layout_run lr ON lr.id = pg.run_id
-             WHERE pg.id = NEW.page_id AND lr.issue_id = NEW.issue_id) THEN
-        RAISE EXCEPTION 'comment: page % does not belong to issue %', NEW.page_id, NEW.issue_id
+    SELECT group_id INTO v_group FROM issue WHERE id = NEW.issue_id;
+    IF NOT is_active_member(v_group, v_user) THEN
+        RAISE EXCEPTION '%: user % is not an active member of the group of issue %', TG_TABLE_NAME, v_user, NEW.issue_id
             USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
 END $$;
 
-DROP TRIGGER IF EXISTS trg_comment_page_issue ON comment;
-CREATE TRIGGER trg_comment_page_issue BEFORE INSERT OR UPDATE OF issue_id, page_id ON comment
-    FOR EACH ROW EXECUTE FUNCTION guard_comment_page_issue();
+DROP TRIGGER IF EXISTS trg_approval_author ON approval;
+CREATE TRIGGER trg_approval_author BEFORE INSERT ON approval
+    FOR EACH ROW EXECUTE FUNCTION guard_review_author('user_id');
+
+DROP TRIGGER IF EXISTS trg_override_author ON override;
+CREATE TRIGGER trg_override_author BEFORE INSERT ON override
+    FOR EACH ROW EXECUTE FUNCTION guard_review_author('author_id');

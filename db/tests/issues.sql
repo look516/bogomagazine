@@ -6,9 +6,9 @@
 BEGIN;
 DO $$ BEGIN
   BEGIN
-    INSERT INTO issue (publication_id, title, period_start, period_end, close_at, template_id,
+    INSERT INTO issue (group_id, title, period_start, period_end, close_at, template_id,
                        min_photos, max_photos, min_pages, max_pages, page_multiple)
-    VALUES ('00000000-0000-0000-0000-0000000000b1','x','2026-10-01','2026-10-31', now(),
+    VALUES ('00000000-0000-0000-0000-0000000000d1','x','2026-10-01','2026-10-31', now(),
             '00000000-0000-0000-0000-0000000000a1', 10, 5, 8, 40, 4);
     RAISE EXCEPTION 'T01 failed: 거부되지 않음';
   EXCEPTION WHEN check_violation THEN NULL;
@@ -20,9 +20,9 @@ ROLLBACK;
 BEGIN;
 DO $$ BEGIN
   BEGIN
-    INSERT INTO issue (publication_id, title, period_start, period_end, close_at, template_id,
+    INSERT INTO issue (group_id, title, period_start, period_end, close_at, template_id,
                        status, min_photos, max_photos, min_pages, max_pages, page_multiple)
-    VALUES ('00000000-0000-0000-0000-0000000000b1','x','2026-10-01','2026-10-31', now(),
+    VALUES ('00000000-0000-0000-0000-0000000000d1','x','2026-10-01','2026-10-31', now(),
             '00000000-0000-0000-0000-0000000000a1', 'bogus', 1, 5, 8, 40, 4);
     RAISE EXCEPTION 'T02 failed: 거부되지 않음';
   EXCEPTION WHEN check_violation THEN NULL;
@@ -34,9 +34,9 @@ ROLLBACK;
 BEGIN;
 DO $$ BEGIN
   BEGIN
-    INSERT INTO issue (publication_id, title, period_start, period_end, close_at, template_id,
+    INSERT INTO issue (group_id, title, period_start, period_end, close_at, template_id,
                        min_photos, max_photos, min_pages, max_pages, page_multiple)
-    VALUES ('00000000-0000-0000-0000-0000000000b1','dup','2026-09-01','2026-09-30', now(),
+    VALUES ('00000000-0000-0000-0000-0000000000d1','dup','2026-09-01','2026-09-30', now(),
             '00000000-0000-0000-0000-0000000000a1', 1, 5, 8, 40, 4);
     RAISE EXCEPTION 'T03 failed: 거부되지 않음';
   EXCEPTION WHEN unique_violation THEN NULL;
@@ -44,51 +44,54 @@ DO $$ BEGIN
 END $$;
 ROLLBACK;
 
-\echo T04 issue 삭제 시 하위 데이터 연쇄 삭제
+\echo T04 호를 지우면 그 호의 선별 결과/이력은 함께 지워지지만 가족의 글과 사진은 남는다
 BEGIN;
 DO $$ BEGIN
   PERFORM change_issue_status('00000000-0000-0000-0000-0000000000c1', 'closing');
-  ASSERT (SELECT count(*) FROM media WHERE issue_id = '00000000-0000-0000-0000-0000000000c1') = 100, 'T04 precondition';
+  PERFORM * FROM select_media('00000000-0000-0000-0000-0000000000c1');
+  ASSERT (SELECT count(*) FROM issue_media WHERE issue_id = '00000000-0000-0000-0000-0000000000c1') = 100, 'T04 precondition: 후보 100장';
   DELETE FROM issue WHERE id = '00000000-0000-0000-0000-0000000000c1';
-  ASSERT (SELECT count(*) FROM media) = 0,                  'T04 media 남음';
-  ASSERT (SELECT count(*) FROM source_post) = 0,            'T04 source_post 남음';
-  ASSERT (SELECT count(*) FROM issue_member) = 0,           'T04 issue_member 남음';
+  ASSERT (SELECT count(*) FROM issue_media) = 0,            'T04 issue_media 남음';
   ASSERT (SELECT count(*) FROM issue_status_history) = 0,   'T04 history 남음';
+  ASSERT (SELECT count(*) FROM media) = 100 AND (SELECT count(*) FROM post) = 50, 'T04 가족의 글/사진이 사라짐';
 END $$;
 ROLLBACK;
 
-\echo T04b 조판 결과(배치)까지 있는 호도 삭제된다 (media 와 placement 가 같은 문장에서 함께 지워짐)
+\echo T04b 조판 결과(배치)까지 있는 호도 삭제된다 (배치와 텍스트는 지워지고 글/사진은 남는다)
 BEGIN;
 DO $$
 DECLARE v constant uuid := '00000000-0000-0000-0000-0000000000c1'; v_run uuid; v_pg uuid; v_tb uuid;
 BEGIN
+  PERFORM change_issue_status(v, 'closing');
+  PERFORM * FROM select_media(v);
   INSERT INTO layout_run (issue_id, template_id, algorithm_version, seed, input_snapshot_hash, status)
   VALUES (v, '00000000-0000-0000-0000-0000000000a1', '0.1.0', 1, 'h', 'done') RETURNING id INTO v_run;
   INSERT INTO page (run_id, page_no) VALUES (v_run, 1) RETURNING id INTO v_pg;
-  INSERT INTO text_block (issue_id, kind, body) VALUES (v, 'caption', '캡션') RETURNING id INTO v_tb;
+  INSERT INTO text_block (issue_id, group_id, kind, body) VALUES (v, '00000000-0000-0000-0000-0000000000d1', 'caption', '캡션') RETURNING id INTO v_tb;
   INSERT INTO placement (page_id, ref_type, media_id, x, y, w, h)
-  SELECT v_pg, 'media', id, 0, 0, 10, 10 FROM media WHERE issue_id = v LIMIT 3;
+  SELECT v_pg, 'media', media_id, 0, 0, 10, 10 FROM issue_media WHERE issue_id = v AND selection_status = 'selected' LIMIT 3;
   INSERT INTO placement (page_id, ref_type, text_block_id, x, y, w, h) VALUES (v_pg, 'text_block', v_tb, 0, 20, 10, 5);
   ASSERT (SELECT count(*) FROM placement) = 4, 'T04b precondition';
 
   DELETE FROM issue WHERE id = v;
-  SET CONSTRAINTS ALL IMMEDIATE;     -- 지연된 외래키 검사를 지금 실행해서, 위반이 남아 있으면 여기서 실패하게 한다
-  ASSERT (SELECT count(*) FROM media) = 0 AND (SELECT count(*) FROM placement) = 0
-     AND (SELECT count(*) FROM text_block) = 0, 'T04b 하위 데이터가 남음';
+  ASSERT (SELECT count(*) FROM placement) = 0 AND (SELECT count(*) FROM text_block) = 0
+     AND (SELECT count(*) FROM layout_run) = 0, 'T04b 하위 데이터가 남음';
+  ASSERT (SELECT count(*) FROM media) = 100, 'T04b 사진이 사라짐';
 END $$;
 ROLLBACK;
 
-\echo T04c 배치된 사진만 따로 삭제하는 것은 여전히 막힌다
+\echo T04c 배치에 쓰인 사진만 따로 삭제하는 것은 막힌다
 BEGIN;
 DO $$
 DECLARE v constant uuid := '00000000-0000-0000-0000-0000000000c1'; v_run uuid; v_pg uuid;
 BEGIN
+  PERFORM change_issue_status(v, 'closing');
+  PERFORM * FROM select_media(v);
   INSERT INTO layout_run (issue_id, template_id, algorithm_version, seed, input_snapshot_hash, status)
   VALUES (v, '00000000-0000-0000-0000-0000000000a1', '0.1.0', 1, 'h', 'done') RETURNING id INTO v_run;
   INSERT INTO page (run_id, page_no) VALUES (v_run, 1) RETURNING id INTO v_pg;
   INSERT INTO placement (page_id, ref_type, media_id, x, y, w, h)
-  SELECT v_pg, 'media', id, 0, 0, 10, 10 FROM media WHERE issue_id = v LIMIT 1;
-  SET CONSTRAINTS ALL IMMEDIATE;
+  SELECT v_pg, 'media', media_id, 0, 0, 10, 10 FROM issue_media WHERE issue_id = v AND selection_status = 'selected' LIMIT 1;
   BEGIN
     DELETE FROM media WHERE id IN (SELECT media_id FROM placement);
     RAISE EXCEPTION 'T04c failed: 배치된 사진이 삭제됨';
@@ -128,26 +131,33 @@ DO $$ BEGIN
 END $$;
 ROLLBACK;
 
-\echo T30 진행상태: 수집 단계 (제출 현황, 마감 초과, viewer 제외)
+\echo T30 진행상태: 수집 단계 (그 달에 글을 올린 활동 중 구성원 수, 나간 구성원 제외, 마감 초과)
 BEGIN;
 DO $$
 DECLARE v_issue constant uuid := '00000000-0000-0000-0000-0000000000c1'; p record;
+        g  constant uuid := '00000000-0000-0000-0000-0000000000d1';
+        u1 constant uuid := '00000000-0000-0000-0000-000000000001';
+        u3 constant uuid := '00000000-0000-0000-0000-000000000003';
 BEGIN
   SELECT * INTO p FROM v_issue_progress WHERE issue_id = v_issue;
-  ASSERT p.current_step = 'collecting' AND p.total_members = 2 AND p.submitted_members = 0 AND p.progress_pct = 0,
-         'T30 초기값 이상';
+  ASSERT p.current_step = 'collecting' AND p.total_members = 2 AND p.submitted_members = 2 AND p.progress_pct = 20,
+         format('T30 초기값 이상: total=%s submitted=%s pct=%s', p.total_members, p.submitted_members, p.progress_pct);
 
-  UPDATE issue_member SET submit_status = 'submitted', submitted_at = now()
-   WHERE issue_id = v_issue AND user_id = '00000000-0000-0000-0000-000000000002';
+  -- 한 명(u1)의 글이 모두 삭제되면 제출한 사람은 1명
+  UPDATE post SET deleted_at = now() WHERE group_id = g AND author_id = u1;
   SELECT * INTO p FROM v_issue_progress WHERE issue_id = v_issue;
-  ASSERT p.submitted_members = 1 AND p.progress_pct = 10, format('T30 제출 후 pct=%s', p.progress_pct);
+  ASSERT p.submitted_members = 1 AND p.progress_pct = 10, format('T30 글 삭제 후 pct=%s', p.progress_pct);
 
-  INSERT INTO app_user (id, name) VALUES ('00000000-0000-0000-0000-000000000003', '관람자');
-  -- 호 참여자는 그 호의 가족 그룹 구성원이어야 하므로 그룹 구성원부터 추가한다
-  INSERT INTO family_member (group_id, user_id, role) VALUES ('00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-000000000003', 'viewer');
-  INSERT INTO issue_member (issue_id, user_id, role) VALUES (v_issue, '00000000-0000-0000-0000-000000000003', 'viewer');
+  -- 새 구성원이 합류하면 전체가 늘고 제출 비율이 낮아진다
+  INSERT INTO app_user (id, name) VALUES (u3, '새 가족');
+  INSERT INTO family_member (group_id, user_id) VALUES (g, u3);
   SELECT * INTO p FROM v_issue_progress WHERE issue_id = v_issue;
-  ASSERT p.total_members = 2, 'T30 viewer 가 집계에 포함됨';
+  ASSERT p.total_members = 3 AND p.submitted_members = 1 AND p.progress_pct = 7, format('T30 합류 후 total=%s pct=%s', p.total_members, p.progress_pct);
+
+  -- 나간 구성원은 집계에서 빠진다
+  UPDATE family_member SET left_at = now() WHERE group_id = g AND user_id = u3;
+  SELECT * INTO p FROM v_issue_progress WHERE issue_id = v_issue;
+  ASSERT p.total_members = 2 AND p.progress_pct = 10, 'T30 나간 구성원이 집계에 포함됨';
 
   UPDATE issue SET close_at = now() - interval '1 day' WHERE id = v_issue;
   SELECT * INTO p FROM v_issue_progress WHERE issue_id = v_issue;
@@ -233,8 +243,9 @@ BEGIN
   ASSERT p.current_step = 'printing' AND p.progress_pct = 90, 'T33 printing';
 
   PERFORM change_issue_status(v_issue, 'printed');
-  INSERT INTO print_order (print_job_id, ordered_by, quantity, status)
-  VALUES (v_job, '00000000-0000-0000-0000-000000000001', 3, 'shipped') RETURNING id INTO v_order;
+  INSERT INTO print_order (print_job_id, ordered_by, delivery_address_id, recipient_name, postal_code, address_line1, quantity, status)
+  VALUES (v_job, '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000e1',
+          '김가상', '00000', '서울특별시 가상구 가상로 1', 3, 'shipped') RETURNING id INTO v_order;
   SELECT * INTO p FROM v_issue_progress WHERE issue_id = v_issue;
   ASSERT p.current_step = 'shipping' AND p.progress_pct = 95, 'T33 shipping';
 
@@ -259,7 +270,7 @@ BEGIN
 END $$;
 ROLLBACK;
 
-\echo T40 호 생성: 이번 달 호/마감시각/구성원/템플릿 복사, 재실행 멱등, 중간 가입자 반영
+\echo T40 호 생성: 이번 달 호/마감시각/템플릿 복사, 재실행 멱등
 BEGIN;
 DO $$
 DECLARE r record; v_issue uuid; i record;
@@ -272,17 +283,10 @@ BEGIN
   ASSERT i.close_at = '2026-11-01 00:00+09', 'T40 마감시각 ' || i.close_at;
   ASSERT i.title = '2026년 10월호' AND i.status = 'collecting', 'T40 제목/상태';
   ASSERT i.min_photos = 15 AND i.max_photos = 60, 'T40 템플릿 값 복사';
-  ASSERT (SELECT role FROM issue_member WHERE issue_id = v_issue AND user_id = '00000000-0000-0000-0000-000000000001') = 'owner', 'T40 owner';
-  ASSERT (SELECT role FROM issue_member WHERE issue_id = v_issue AND user_id = '00000000-0000-0000-0000-000000000002') = 'contributor', 'T40 contributor';
 
   SELECT * INTO r FROM open_monthly_issues('2026-10-02 12:00+09');
   ASSERT NOT r.o_created AND r.o_issue_id = v_issue, 'T40 재실행이 중복 생성';
   ASSERT (SELECT count(*) FROM issue WHERE period_start = '2026-10-01') = 1, 'T40 중복 호';
-
-  INSERT INTO app_user (id, name) VALUES ('00000000-0000-0000-0000-000000000003', '새 가족');
-  INSERT INTO family_member (group_id, user_id, role) VALUES ('00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-000000000003', 'viewer');
-  PERFORM * FROM open_monthly_issues('2026-10-03 12:00+09');
-  ASSERT (SELECT role FROM issue_member WHERE issue_id = v_issue AND user_id = '00000000-0000-0000-0000-000000000003') = 'viewer', 'T40 중간 가입자 미반영';
 END $$;
 ROLLBACK;
 
@@ -310,7 +314,7 @@ DO $$ BEGIN
 END $$;
 ROLLBACK;
 
-\echo T43 마감: 시각 후 closing + 제출 현황 확정
+\echo T43 마감: 시각 후 closing + 사진 선별
 BEGIN;
 DO $$
 DECLARE r record; v_issue constant uuid := '00000000-0000-0000-0000-0000000000c1';
@@ -319,9 +323,7 @@ BEGIN
   ASSERT r.o_action = 'closing' AND r.o_issue_id = v_issue, 'T43 action=' || r.o_action;
   ASSERT (SELECT status FROM issue WHERE id = v_issue) = 'closing', 'T43 status';
   ASSERT (SELECT closed_at IS NOT NULL FROM issue WHERE id = v_issue), 'T43 closed_at';
-  ASSERT (SELECT submit_status FROM issue_member WHERE issue_id = v_issue AND user_id = '00000000-0000-0000-0000-000000000002') = 'submitted', 'T43 업로드한 사람';
-  ASSERT (SELECT submit_status FROM issue_member WHERE issue_id = v_issue AND user_id = '00000000-0000-0000-0000-000000000001') = 'skipped', 'T43 안 올린 사람';
-  ASSERT (SELECT count(*) FROM media WHERE issue_id = v_issue AND selection_status = 'selected') >= 15, 'T43 선별 안 됨';
+  ASSERT (SELECT count(*) FROM issue_media WHERE issue_id = v_issue AND selection_status = 'selected') >= 15, 'T43 선별 안 됨';
 END $$;
 ROLLBACK;
 
@@ -354,11 +356,10 @@ BEGIN;
 DO $$
 DECLARE v_bad uuid; n_ok int; n_err int; k int;
 BEGIN
-  INSERT INTO issue (publication_id, title, period_start, period_end, close_at, template_id,
+  INSERT INTO issue (group_id, title, period_start, period_end, close_at, template_id,
                      min_photos, max_photos, min_pages, max_pages, page_multiple)
-  VALUES ('00000000-0000-0000-0000-0000000000b1','bad','2026-08-01','2026-08-31','2026-09-01 00:00+09',
+  VALUES ('00000000-0000-0000-0000-0000000000d1','bad','2026-08-01','2026-08-31','2026-09-01 00:00+09',
           '00000000-0000-0000-0000-0000000000a1', 1, 5, 8, 40, 4) RETURNING id INTO v_bad;
-  INSERT INTO issue_member (issue_id, user_id, role) VALUES (v_bad, '00000000-0000-0000-0000-000000000002', 'contributor');
   -- 문제의 호만 이력 기록 시 실패하도록 함정 설치 (트랜잭션 안에서만 존재)
   EXECUTE format($f$
     CREATE FUNCTION trg_fail() RETURNS trigger LANGUAGE plpgsql AS
@@ -575,10 +576,10 @@ BEGIN
 END $$;
 ROLLBACK;
 
-\echo T58 참여자가 0명이어도 진행률은 NULL 이 아님(S6)
+\echo T58 활동 중인 구성원이 0명이어도 진행률은 NULL 이 아님(S6)
 BEGIN;
 DO $$ BEGIN
-  DELETE FROM issue_member;
+  UPDATE family_member SET left_at = now();
   ASSERT (SELECT progress_pct FROM v_issue_progress WHERE issue_id = '00000000-0000-0000-0000-0000000000c1') = 0, 'T58 pct';
 END $$;
 ROLLBACK;
@@ -588,9 +589,9 @@ BEGIN;
 DO $$
 DECLARE a int; b int; c int; d int; e int; f int;
 BEGIN
-  INSERT INTO issue (publication_id, title, period_start, period_end, close_at, template_id,
+  INSERT INTO issue (group_id, title, period_start, period_end, close_at, template_id,
                      min_photos, max_photos, min_pages, max_pages, page_multiple)
-  SELECT '00000000-0000-0000-0000-0000000000b1', 'old' || m, make_date(2026, m, 1),
+  SELECT '00000000-0000-0000-0000-0000000000d1', 'old' || m, make_date(2026, m, 1),
          (make_date(2026, m, 1) + interval '1 month - 1 day')::date,
          (make_date(2026, m, 1) + interval '1 month')::timestamptz,
          '00000000-0000-0000-0000-0000000000a1', 15, 60, 8, 40, 4

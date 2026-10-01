@@ -39,7 +39,7 @@ git push -u origin HEAD                     # PR 을 만들면 CI 가 같은 검
 ## 브랜치와 커밋
 
 - **trunk-based**: `main` 은 항상 배포 가능. 브랜치는 며칠 안에 합친다. 이름은 `feat/…`, `fix/…`, `docs/…`.
-- **커밋 메시지**: `종류(모듈): 요약` — 종류는 `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, 모듈은 `identity | groups | templates | issues | intake | layout | review | printing`.
+- **커밋 메시지**: `종류(모듈): 요약` — 종류는 `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, 모듈은 `identity | groups | templates | issues | feed | layout | review | printing`.
   예: `fix(issues): 재오픈 시 close_at 을 필수로`
 - 한 PR은 한 가지 목적. 마이그레이션이 있으면 PR 설명에 이유를 쓴다.
 

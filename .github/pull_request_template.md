@@ -2,7 +2,7 @@
 <!-- 변경 내용과 이유. 관련 TODO.md 항목이나 이슈가 있으면 링크 -->
 
 ## 영향받는 모듈
-<!-- identity / groups / templates / issues / intake / layout / review / printing -->
+<!-- identity / groups / templates / issues / feed / layout / review / printing -->
 
 ## 체크리스트
 - [ ] `./scripts/db.sh test` 통과

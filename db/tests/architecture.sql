@@ -12,15 +12,15 @@ SELECT c.relname::text AS tbl,
  WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p')
    AND c.relname <> 'flyway_schema_history';
 
--- 허용하는 모듈 간 외래키 방향 (from 이 to 의 테이블을 참조해도 된다)
+-- 허용하는 모듈 간 의존 방향 (from 이 to 의 테이블을 참조/읽어도 된다). scripts/analysis/fn-deps.py 도 이 목록을 읽는다.
 CREATE TEMP TABLE allowed_dep (from_module text, to_module text, PRIMARY KEY (from_module, to_module));
 INSERT INTO allowed_dep VALUES
     ('groups',   'identity'),
-    ('issues',   'identity'), ('issues',   'groups'),  ('issues',   'templates'),
-    ('intake',   'identity'), ('intake',   'issues'),
-    ('layout',   'issues'),   ('layout',   'templates'), ('layout', 'intake'),
-    ('review',   'identity'), ('review',   'issues'),  ('review',   'layout'),
-    ('printing', 'identity'), ('printing', 'issues'),  ('printing', 'layout');
+    ('issues',   'identity'), ('issues',   'groups'),   ('issues',   'templates'),
+    ('feed',     'identity'), ('feed',     'groups'),   ('feed',     'issues'),
+    ('layout',   'issues'),   ('layout',   'templates'), ('layout',  'feed'),
+    ('review',   'identity'), ('review',   'groups'),   ('review',   'issues'),   ('review', 'layout'),
+    ('printing', 'identity'), ('printing', 'groups'),   ('printing', 'issues'),   ('printing', 'layout');
 
 \echo T90 모든 테이블에는 'module:<알려진 모듈> | 설명' 코멘트가 있다
 DO $$
@@ -29,7 +29,7 @@ BEGIN
   SELECT string_agg(tbl || ' (' || COALESCE(module, '코멘트 없음/형식 오류') || ')', ', ' ORDER BY tbl) INTO bad
     FROM module_of
    WHERE module IS NULL
-      OR module NOT IN ('identity', 'groups', 'templates', 'issues', 'intake', 'layout', 'review', 'printing');
+      OR module NOT IN ('identity', 'groups', 'templates', 'issues', 'feed', 'layout', 'review', 'printing');
   ASSERT bad IS NULL,
          '소유 모듈 코멘트가 없거나 알 수 없는 모듈: ' || COALESCE(bad, '') ||
          E'\n-> COMMENT ON TABLE <테이블> IS ''module:<모듈> | 설명''; 을 마이그레이션에 추가하세요';

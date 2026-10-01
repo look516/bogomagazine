@@ -2,17 +2,18 @@
 -- main 에 합쳐지고 어떤 DB 에 적용된 뒤에는 수정하지 않는다 (체크섬이 깨짐). 그때부터는 새 V0xx__설명.sql 을 추가한다.
 -- 함수/뷰/트리거는 R__*.sql 에서 관리한다.
 --
--- 무결성 원칙: 같은 사실이 두 곳에 있으면(예: 사진의 호 = 원본 게시물의 호) 복합 외래키로 서로 어긋나지 못하게 한다.
---   복합 외래키는 컬럼 중 하나가 NULL 이면 검사를 건너뛴다 (게시물 없이 올린 사진, 호 전체 승인 등이 이에 해당).
---   외래키로 표현할 수 없는 것(배치 <-> 호, 코멘트 <-> 호, 호 참여자 <-> 그룹, 업로더 <-> 호 참여자)은 R__*.sql 의 트리거가 지킨다.
-
--- 자동 조판 출판 서비스 DB 스키마 (PostgreSQL)
--- 흐름: 수집 -> 선별 -> 자동 조판 -> 사람 수정 -> 미리보기 -> 인쇄
+-- 서비스: 가족 그룹(방장 + 구성원)이 앱 안 피드에 사진/글을 올리면, 매월 그 달의 글을 모아 신문(월간지)으로 자동 조판하고
+--         가족이 검토/승인한 뒤 인쇄해서 조부모님께 우편으로 보낸다. 로그인은 카카오/애플만. 조부모님은 앱 사용자가 아니다.
+-- 흐름: 피드 게시 -> (월 마감) 선별 -> 자동 조판 -> 가족 검토/수정 -> 승인 -> 미리보기 -> 인쇄 -> 배송
+--
+-- 무결성 원칙: 같은 사실이 두 곳에 있으면(예: 사진의 그룹 = 게시물의 그룹) 복합 외래키로 서로 어긋나지 못하게 한다.
+--   복합 외래키는 컬럼 중 하나가 NULL 이면 검사를 건너뛴다 (호 전체 승인, 게시물이 지워진 텍스트 등이 이에 해당).
+--   외래키로 표현할 수 없는 것(배치 <-> 선별된 사진, 작성자 <-> 활동 중인 구성원 등)은 R__*.sql 의 트리거가 지킨다.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;  -- gen_random_uuid()
 
 -- =========================================================
--- 0. 사용자
+-- 0. 사용자 / 로그인 (카카오, 애플)
 -- =========================================================
 CREATE TABLE app_user (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -24,16 +25,16 @@ CREATE TABLE app_user (
 -- 이메일은 있을 때만 유일 (대소문자 무시)
 CREATE UNIQUE INDEX ux_app_user_email ON app_user (lower(email)) WHERE email IS NOT NULL;
 
--- 로그인 수단 (한 사용자가 여러 개 연결 가능)
+-- 로그인 수단 (한 사용자가 카카오와 애플을 모두 연결할 수 있다)
 CREATE TABLE auth_identity (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id       uuid NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
-    provider      text NOT NULL CHECK (provider IN ('kakao','apple','google','password')),
+    provider      text NOT NULL CHECK (provider IN ('kakao','apple')),
     provider_uid  text NOT NULL,       -- 카카오 회원번호 / 애플 sub (이메일 말고 이것으로 식별)
     email         text,                -- 해당 제공자가 준 이메일 (참고용)
     email_verified boolean NOT NULL DEFAULT false,
     is_private_relay boolean NOT NULL DEFAULT false,   -- 애플 릴레이 이메일 여부
-    refresh_token_ref text,            -- 시크릿 스토어 참조 (원문 저장 금지)
+    refresh_token_ref text,            -- 시크릿 저장소 참조 (원문 저장 금지)
     last_login_at timestamptz,
     created_at    timestamptz NOT NULL DEFAULT now(),
     UNIQUE (provider, provider_uid)
@@ -82,13 +83,14 @@ CREATE TABLE style (
 );
 
 -- =========================================================
--- 2. 출판물 / 호 / 협업
+-- 2. 가족 그룹 (방장 + 구성원), 초대, 배송지
 -- =========================================================
--- 가족 그룹: 월 단위 호 마감의 주체
+-- 방장은 owner_id 하나로 표현한다 (구성원의 역할 컬럼을 따로 두지 않는다: 같은 사실이 두 곳에 있으면 어긋난다).
+-- 방장만 멤버 관리(초대, 내보내기, 방장 넘기기) 권한을 가진다 -> R__005_groups_membership.sql 의 함수와 트리거
 CREATE TABLE family_group (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name        text NOT NULL,
-    owner_id    uuid NOT NULL REFERENCES app_user(id),
+    owner_id    uuid NOT NULL REFERENCES app_user(id),   -- 방장
     close_day   int  NOT NULL DEFAULT 1 CHECK (close_day BETWEEN 1 AND 28),  -- 다음 달 며칠 00:00 에 마감
     timezone    text NOT NULL DEFAULT 'Asia/Seoul',
     -- true: 선별 가능한 사진이 min_photos 미만이면 자동 미발행(skipped)
@@ -97,27 +99,67 @@ CREATE TABLE family_group (
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- 구성원. 나가거나 내보내도 행은 지우지 않고 left_at 을 채운다 (그 사람이 쓴 글/기록의 작성자 정보를 유지하려고).
 CREATE TABLE family_member (
     group_id   uuid NOT NULL REFERENCES family_group(id) ON DELETE CASCADE,
     user_id    uuid NOT NULL REFERENCES app_user(id),
-    role       text NOT NULL CHECK (role IN ('admin','member','viewer')),
+    nickname   text,                    -- 가족 안에서의 호칭 (엄마, 아빠 ...)
     joined_at  timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (group_id, user_id)
+    left_at    timestamptz,             -- NULL = 활동 중
+    PRIMARY KEY (group_id, user_id),
+    CHECK (left_at IS NULL OR left_at >= joined_at)
 );
 
-CREATE TABLE publication (
+-- 방장은 반드시 그 그룹의 구성원이어야 한다. 그룹과 구성원이 서로를 참조하므로 커밋 시점에 검사한다
+-- (그룹을 만들 때는 한 트랜잭션에서 그룹과 방장 구성원을 함께 넣는다: create_family_group()).
+ALTER TABLE family_group
+    ADD CONSTRAINT family_group_owner_member_fkey
+    FOREIGN KEY (id, owner_id) REFERENCES family_member (group_id, user_id) DEFERRABLE INITIALLY DEFERRED;
+
+-- 카카오톡으로 보내는 초대 링크. 링크의 토큰 원문은 저장하지 않고 해시만 저장한다.
+-- 애플은 이메일을 숨길 수 있으므로 이메일이 아니라 링크 토큰으로 합류시킨다. 합류하는 사람은 항상 일반 구성원이다.
+CREATE TABLE family_invite (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    group_id    uuid NOT NULL REFERENCES family_group(id),
-    name        text NOT NULL,
-    owner_id    uuid NOT NULL REFERENCES app_user(id),
-    created_at  timestamptz NOT NULL DEFAULT now()
+    group_id    uuid NOT NULL REFERENCES family_group(id) ON DELETE CASCADE,
+    created_by  uuid NOT NULL,              -- 방장 (R__005 트리거가 검사)
+    token_hash  text NOT NULL UNIQUE CHECK (length(token_hash) = 64),   -- sha256 hex
+    expires_at  timestamptz NOT NULL,
+    max_uses    int CHECK (max_uses IS NULL OR max_uses > 0),           -- NULL = 횟수 제한 없음 (만료 전까지)
+    use_count   int NOT NULL DEFAULT 0 CHECK (use_count >= 0),
+    revoked_at  timestamptz,                -- 방장이 링크를 취소한 시각
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    CHECK (expires_at > created_at),
+    CHECK (max_uses IS NULL OR use_count <= max_uses),
+    -- 커밋 시점 검사: 그룹을 지우면 구성원과 초대가 같은 문장에서 함께 지워지기 때문
+    FOREIGN KEY (group_id, created_by) REFERENCES family_member (group_id, user_id) DEFERRABLE INITIALLY DEFERRED
 );
 
+-- 조부모님 배송지. 조부모님은 앱에 로그인하지 않고 신문으로 받으시므로 주소만 저장한다.
+-- 주문(print_order)에는 주문 시점의 주소를 복사해 두므로, 여기서 주소를 고치거나 지워도 이미 보낸 주문의 기록은 바뀌지 않는다.
+CREATE TABLE delivery_address (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    group_id        uuid NOT NULL REFERENCES family_group(id) ON DELETE CASCADE,
+    label           text NOT NULL,          -- 예: 친할머니·친할아버지 댁
+    recipient_name  text NOT NULL,
+    recipient_phone text,                   -- 개인정보: 접근을 제한하고 필요하면 암호화한다 (TODO.md)
+    postal_code     text NOT NULL,
+    address_line1   text NOT NULL,
+    address_line2   text,
+    memo            text,                   -- 배송 메모 (예: 경비실에 맡겨 주세요)
+    created_by      uuid NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (group_id, created_by) REFERENCES family_member (group_id, user_id) DEFERRABLE INITIALLY DEFERRED
+);
+
+-- =========================================================
+-- 3. 월간 호
+-- =========================================================
 CREATE TABLE issue (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    publication_id  uuid NOT NULL REFERENCES publication(id),
+    group_id        uuid NOT NULL REFERENCES family_group(id),
     title           text NOT NULL,
-    period_start    date NOT NULL,
+    period_start    date NOT NULL,          -- 이 호에 실리는 게시물의 기간 (그룹 타임존 기준 날짜)
     period_end      date NOT NULL,
     -- 상태 흐름은 아래 issue_status_transition 과 R__020_issues_lifecycle.sql 참고
     --   collecting(수집) -> closing(마감 처리: 선별+조판) -> review(검토) -> approved(승인)
@@ -143,18 +185,8 @@ CREATE TABLE issue (
     CHECK (period_end >= period_start),
     CHECK (min_photos <= max_photos),
     CHECK (min_pages <= max_pages),
-    UNIQUE (publication_id, period_start)     -- 그룹당 같은 기간의 호는 하나
-);
-
-CREATE TABLE issue_member (
-    issue_id       uuid NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
-    user_id        uuid NOT NULL REFERENCES app_user(id),
-    role           text NOT NULL CHECK (role IN ('owner','editor','contributor','viewer')),
-    -- 참여자별 제출 현황 (viewer 는 집계에서 제외)
-    submit_status  text NOT NULL DEFAULT 'pending'
-        CHECK (submit_status IN ('pending','submitted','skipped')),
-    submitted_at   timestamptz,
-    PRIMARY KEY (issue_id, user_id)
+    UNIQUE (group_id, period_start),          -- 그룹당 같은 기간의 호는 하나
+    UNIQUE (id, group_id)                     -- 복합 외래키(issue_media/text_block 이 같은 그룹만 참조)의 대상
 );
 
 -- 상태 변경 이력 (진행 타임라인 조회용)
@@ -178,50 +210,27 @@ CREATE TABLE issue_status_transition (
 );
 
 -- =========================================================
--- 3. 입력 수집 (SNS 게시물 / 사진)
+-- 4. 피드 (앱 안에서 가족이 올리는 사진/글)와 호별 선별
+--    게시물은 호와 독립이다. 호는 "그 달(period_start~period_end)의 게시물을 모아 만든 결과물"이다.
 -- =========================================================
-CREATE TABLE social_account (
-    id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id        uuid NOT NULL REFERENCES app_user(id),
-    platform       text NOT NULL,
-    external_id    text NOT NULL,
-    token_ref      text,                -- 시크릿 스토어 참조 (토큰 원문 저장 금지)
-    consent_at     timestamptz,
-    consent_scope  jsonb,               -- 사용/인쇄/공개 동의 범위
-    UNIQUE (platform, external_id),
-    -- 복합 외래키의 대상: source_post 가 계정의 플랫폼/주인과 어긋나지 않게 한다
-    UNIQUE (id, platform),
-    UNIQUE (id, user_id)
+CREATE TABLE post (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    group_id    uuid NOT NULL REFERENCES family_group(id) ON DELETE CASCADE,
+    author_id   uuid NOT NULL,
+    body        text,                       -- 글 (사진만 올릴 수도 있다)
+    posted_at   timestamptz NOT NULL DEFAULT now(),   -- 어느 호에 실릴지를 정한다 (그룹 타임존 기준 날짜)
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    deleted_at  timestamptz,                -- 삭제한 글. 이미 마감된 호의 내용은 바뀌지 않는다
+    UNIQUE (id, group_id),                  -- 복합 외래키(사진/텍스트가 같은 그룹만 참조)의 대상
+    -- 작성자는 그 그룹의 구성원이어야 한다 (활동 중인지는 R__030 트리거가 검사)
+    FOREIGN KEY (group_id, author_id) REFERENCES family_member (group_id, user_id) DEFERRABLE INITIALLY DEFERRED
 );
-
-CREATE TABLE source_post (
-    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    issue_id          uuid NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
-    contributor_id    uuid NOT NULL REFERENCES app_user(id),
-    account_id        uuid,
-    platform          text NOT NULL,
-    external_post_id  text,
-    posted_at         timestamptz NOT NULL,
-    caption           text,
-    hashtags          text[] NOT NULL DEFAULT '{}',
-    location          text,
-    engagement        jsonb,            -- 좋아요/댓글 수 등 (중요도 점수 입력)
-    raw               jsonb,            -- 원본 payload 스냅샷
-    created_at        timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (issue_id, platform, external_post_id),
-    -- 복합 외래키(media/text_block 이 "같은 호의 게시물"만 참조)의 대상
-    UNIQUE (id, issue_id),
-    -- 계정이 있으면 그 계정의 플랫폼/주인과 일치해야 한다 (계정 없이 직접 올린 게시물은 account_id 가 NULL)
-    FOREIGN KEY (account_id, platform)       REFERENCES social_account (id, platform),
-    FOREIGN KEY (account_id, contributor_id) REFERENCES social_account (id, user_id)
-);
-CREATE INDEX ix_source_post_issue_time ON source_post (issue_id, posted_at);
 
 CREATE TABLE media (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    issue_id          uuid NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
-    source_post_id    uuid,
-    uploader_id       uuid NOT NULL REFERENCES app_user(id),
+    post_id           uuid NOT NULL,
+    group_id          uuid NOT NULL,        -- 게시물의 그룹 (복합 외래키로 일치를 보장. issue_media 가 같은 그룹만 묶게 하려고 둠)
     kind              text NOT NULL DEFAULT 'photo' CHECK (kind IN ('photo','video_thumb')),
     storage_key       text NOT NULL,
     sha256            text NOT NULL,
@@ -231,24 +240,20 @@ CREATE TABLE media (
     taken_at          timestamptz,
     color_profile     text,
     -- 이미지 분석 결과
-    focal_point       jsonb,            -- {x,y} 0..1
-    saliency          jsonb,            -- 주요 피사체/얼굴 영역
+    focal_point       jsonb,                -- {x,y} 0..1
+    saliency          jsonb,                -- 주요 피사체/얼굴 영역
     quality_score     real,
-    phash             bigint,           -- 유사 사진 묶기
-    -- 선별 상태
-    selection_status  text NOT NULL DEFAULT 'candidate'
-        CHECK (selection_status IN ('candidate','selected','excluded_auto','excluded_manual')),
-    pinned            boolean NOT NULL DEFAULT false,   -- 사용자가 "꼭 넣기" 지정
-    selection_score   real,
-    -- 권리/동의
-    rights_ok         boolean NOT NULL DEFAULT false,
+    phash             bigint,               -- 유사 사진 묶기
+    rights_ok         boolean NOT NULL DEFAULT true,    -- false 면 선별에서 제외 (신고 등으로 쓸 수 없는 사진)
+    -- 사용자의 의도 (호와 무관하게 사진에 붙는 선택). 선별 결과는 issue_media 에 따로 둔다.
+    pinned            boolean NOT NULL DEFAULT false,   -- "꼭 넣기"
+    excluded          boolean NOT NULL DEFAULT false,   -- "이번 호에서 빼기"
     created_at        timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (issue_id, sha256),
-    -- 원본 게시물이 있으면 같은 호의 게시물이어야 한다. 게시물이 지워져도 사진은 남으므로 source_post_id 만 NULL 로 만든다
-    FOREIGN KEY (source_post_id, issue_id) REFERENCES source_post (id, issue_id) ON DELETE SET NULL (source_post_id)
+    UNIQUE (post_id, sha256),
+    UNIQUE (id, group_id),                  -- 복합 외래키(issue_media)의 대상
+    FOREIGN KEY (post_id, group_id) REFERENCES post (id, group_id) ON DELETE CASCADE
 );
-CREATE INDEX ix_media_issue_sel ON media (issue_id, selection_status);
-CREATE INDEX ix_media_phash     ON media (phash);
+CREATE INDEX ix_media_phash ON media (phash);
 
 CREATE TABLE media_rendition (
     media_id     uuid NOT NULL REFERENCES media(id) ON DELETE CASCADE,
@@ -259,21 +264,38 @@ CREATE TABLE media_rendition (
     PRIMARY KEY (media_id, purpose)
 );
 
--- 본문 텍스트 블록 (캡션, 인용, 기사 등)
+-- 호별 사진 선별 결과. 사진 자체(media)와 "이 호에서 어떻게 되었나"를 분리한다 (파생 데이터, 마감할 때 만들어진다).
+CREATE TABLE issue_media (
+    issue_id          uuid NOT NULL,
+    media_id          uuid NOT NULL,
+    group_id          uuid NOT NULL,        -- 호의 그룹 = 사진의 그룹 (복합 외래키 두 개로 보장)
+    selection_status  text NOT NULL DEFAULT 'candidate'
+        CHECK (selection_status IN ('candidate','selected','excluded_auto','excluded_manual')),
+    selection_score   real,
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (issue_id, media_id),
+    FOREIGN KEY (issue_id, group_id) REFERENCES issue (id, group_id) ON DELETE CASCADE,
+    FOREIGN KEY (media_id, group_id) REFERENCES media (id, group_id) ON DELETE CASCADE
+);
+CREATE INDEX ix_issue_media_sel ON issue_media (issue_id, selection_status);
+
+-- 호에 들어가는 글 조각(제목, 캡션, 인용, 본문). 게시물 글에서 만들어지거나 조판 중에 만들어진다.
 CREATE TABLE text_block (
     id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    issue_id         uuid NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
-    source_post_id   uuid,
+    issue_id         uuid NOT NULL,
+    group_id         uuid NOT NULL,
+    post_id          uuid,                  -- 원본 게시물 (제목처럼 만들어진 글은 NULL)
     kind             text NOT NULL CHECK (kind IN ('title','caption','quote','body')),
     body             text NOT NULL,
-    runs             jsonb,             -- 인라인 서식 span 배열
+    runs             jsonb,                 -- 인라인 서식 span 배열
     created_by       uuid REFERENCES app_user(id),
     created_at       timestamptz NOT NULL DEFAULT now(),
-    FOREIGN KEY (source_post_id, issue_id) REFERENCES source_post (id, issue_id) ON DELETE SET NULL (source_post_id)
+    FOREIGN KEY (issue_id, group_id) REFERENCES issue (id, group_id) ON DELETE CASCADE,
+    FOREIGN KEY (post_id, group_id)  REFERENCES post (id, group_id) ON DELETE SET NULL (post_id)
 );
 
 -- =========================================================
--- 4. 자동 조판 결과 (파생물, 재생성 가능)
+-- 5. 자동 조판 결과 (파생물, 재생성 가능)
 -- =========================================================
 CREATE TABLE layout_run (
     id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -323,10 +345,10 @@ CREATE TABLE placement (
     page_id   uuid NOT NULL REFERENCES page(id) ON DELETE CASCADE,
     slot_id   text,
     ref_type  text NOT NULL CHECK (ref_type IN ('media','text_block')),
-    -- 커밋 시점에 검사(DEFERRABLE INITIALLY DEFERRED): 호를 삭제하면 사진/텍스트(호에서 CASCADE)와 배치(조판 -> 페이지 -> 배치로
-    -- CASCADE)가 같은 문장에서 함께 지워지는데, 즉시 검사하면 사진이 먼저 지워지는 순간 배치가 남아 있어 호 삭제가 실패한다.
-    -- 배치된 사진만 따로 지우는 것은 여전히 막힌다. 같은 호의 사진/텍스트인지는 R__060_layout_worker.sql 의 트리거가 지킨다.
-    media_id       uuid REFERENCES media(id) DEFERRABLE INITIALLY DEFERRED,
+    -- 배치에 쓰인 사진/텍스트는 따로 지울 수 없다. 사진은 호와 독립이라 호를 지워도 남으므로 즉시 검사한다.
+    -- 텍스트는 호를 지우면 text_block 과 placement 가 같은 문장에서 지워지고 순서가 보장되지 않으므로 커밋 시점에 검사한다.
+    -- 이 호에서 선별된 사진/같은 호의 텍스트인지는 R__060_layout_worker.sql 의 트리거가 지킨다.
+    media_id       uuid REFERENCES media(id),
     text_block_id  uuid REFERENCES text_block(id) DEFERRABLE INITIALLY DEFERRED,
     -- 단위: mm
     x numeric(8,2) NOT NULL,
@@ -343,9 +365,10 @@ CREATE TABLE placement (
 );
 CREATE INDEX ix_placement_page  ON placement (page_id);
 CREATE INDEX ix_placement_media ON placement (media_id);
+CREATE INDEX ix_placement_text_block ON placement (text_block_id);
 
 -- =========================================================
--- 5. 협업: 수동 보정 / 락 / 승인 / 코멘트
+-- 6. 협업: 수동 보정 / 락 / 승인
 -- =========================================================
 CREATE TABLE override (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -388,19 +411,8 @@ CREATE TABLE approval (
     FOREIGN KEY (page_id, run_id)  REFERENCES page (id, run_id) ON DELETE CASCADE
 );
 
-CREATE TABLE comment (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    issue_id    uuid NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
-    page_id     uuid REFERENCES page(id) ON DELETE CASCADE,
-    anchor      jsonb,              -- 페이지 위 좌표 또는 placement 참조
-    author_id   uuid NOT NULL REFERENCES app_user(id),
-    body        text NOT NULL,
-    resolved    boolean NOT NULL DEFAULT false,
-    created_at  timestamptz NOT NULL DEFAULT now()
-);
-
 -- =========================================================
--- 6. 미리보기 / 인쇄
+-- 7. 미리보기 / 인쇄 / 배송
 -- =========================================================
 CREATE TABLE preview (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -434,23 +446,31 @@ CREATE TABLE print_job (
     FOREIGN KEY (run_id, issue_id) REFERENCES layout_run (id, issue_id)
 );
 
+-- 인쇄 주문 1건 = 배송지 1곳. 같은 인쇄 작업(PDF)으로 조부모님 댁마다 주문을 하나씩 만든다.
+-- 받는 사람/주소는 주문 시점의 값을 복사해 둔다 (배송지를 나중에 고치거나 지워도 이미 보낸 주문의 기록이 바뀌지 않게).
+-- R__080_printing_guards.sql 의 트리거가 "같은 그룹의 배송지", "활동 중인 구성원의 주문"을 검사한다.
 CREATE TABLE print_order (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    seq           bigint GENERATED ALWAYS AS IDENTITY,   -- 최신 판정 기준 (created_at 아님)
-    print_job_id  uuid NOT NULL REFERENCES print_job(id),
-    ordered_by    uuid NOT NULL REFERENCES app_user(id),
-    vendor        text,
-    quantity      int NOT NULL CHECK (quantity > 0),
-    shipping      jsonb,
-    price         numeric(12,2),
-    status        text NOT NULL DEFAULT 'pending'
+    id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    seq                 bigint GENERATED ALWAYS AS IDENTITY,   -- 최신 판정 기준 (created_at 아님)
+    print_job_id        uuid NOT NULL REFERENCES print_job(id),
+    delivery_address_id uuid REFERENCES delivery_address(id) ON DELETE SET NULL,   -- 어느 배송지에서 복사했는지 (참고용)
+    ordered_by          uuid NOT NULL REFERENCES app_user(id),
+    recipient_name      text NOT NULL,
+    recipient_phone     text,
+    postal_code         text NOT NULL,
+    address_line1       text NOT NULL,
+    address_line2       text,
+    vendor              text,
+    quantity            int NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    price               numeric(12,2),
+    status              text NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending','confirmed','printing','shipped','delivered','cancelled')),
-    tracking      text,
-    created_at    timestamptz NOT NULL DEFAULT now()
+    tracking            text,
+    created_at          timestamptz NOT NULL DEFAULT now()
 );
 
 -- =========================================================
--- 7. 폰트
+-- 8. 폰트
 -- =========================================================
 CREATE TABLE font (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -465,64 +485,60 @@ CREATE TABLE font (
 );
 
 -- =========================================================
--- 8. 추가 인덱스 (조회 경로 + 부모 삭제 시 연쇄 삭제 속도)
+-- 9. 추가 인덱스 (조회 경로 + 부모 삭제 시 연쇄 삭제 속도)
 -- =========================================================
 -- 마감 배치가 찾는 "수집 중이고 마감이 지난 호"
 CREATE INDEX ix_issue_collecting_close ON issue (close_at) WHERE status = 'collecting';
+-- 사용자 기준 조회 ("내가 속한 그룹"): 기본키가 (group_id, user_id)라서 user_id 만으로는 못 탄다
+CREATE INDEX ix_family_member_user   ON family_member (user_id);
+CREATE INDEX ix_family_invite_group  ON family_invite (group_id);
+CREATE INDEX ix_delivery_address_group ON delivery_address (group_id);
+-- 피드: 그룹의 기간별 게시물 (월 마감 때 모으는 경로), 작성자별 (복합 외래키/탈퇴 처리)
+CREATE INDEX ix_post_group_time      ON post (group_id, posted_at);
+CREATE INDEX ix_post_group_author    ON post (group_id, author_id);
+CREATE INDEX ix_media_post           ON media (post_id);
+CREATE INDEX ix_issue_media_media    ON issue_media (media_id);
+CREATE INDEX ix_text_block_issue     ON text_block (issue_id);
+CREATE INDEX ix_text_block_post      ON text_block (post_id);
 -- 진행 뷰가 페이지/호/인쇄 단위로 "가장 최근 1건"을 찾는 경로
 CREATE INDEX ix_approval_page        ON approval (page_id, seq DESC);
 CREATE INDEX ix_approval_issue       ON approval (issue_id);
 CREATE INDEX ix_approval_run         ON approval (run_id);
+CREATE INDEX ix_override_issue       ON override (issue_id);
 CREATE INDEX ix_print_job_issue      ON print_job (issue_id, seq DESC);
 CREATE INDEX ix_print_job_run        ON print_job (run_id);
 CREATE INDEX ix_print_order_job      ON print_order (print_job_id, seq DESC);
--- 부모 삭제(호/게시물/그룹) 시 하위 행을 찾는 경로
-CREATE INDEX ix_media_source_post    ON media (source_post_id);
-CREATE INDEX ix_text_block_issue     ON text_block (issue_id);
-CREATE INDEX ix_text_block_post      ON text_block (source_post_id);
-CREATE INDEX ix_override_issue       ON override (issue_id);
-CREATE INDEX ix_comment_issue        ON comment (issue_id);
-CREATE INDEX ix_comment_page         ON comment (page_id);
-CREATE INDEX ix_source_post_account  ON source_post (account_id);
-CREATE INDEX ix_publication_group    ON publication (group_id);
--- 사용자 기준 조회 ("내가 속한 그룹/호"): 기본키가 (group_id, user_id)/(issue_id, user_id)라서 user_id 만으로는 못 탄다
-CREATE INDEX ix_family_member_user   ON family_member (user_id);
-CREATE INDEX ix_issue_member_user    ON issue_member (user_id);
--- 회원 탈퇴(anonymize_user) 시 사용자의 콘텐츠/연동을 찾는 경로
-CREATE INDEX ix_media_uploader       ON media (uploader_id);
-CREATE INDEX ix_source_post_contrib  ON source_post (contributor_id);
-CREATE INDEX ix_social_account_user  ON social_account (user_id);
+CREATE INDEX ix_print_order_address  ON print_order (delivery_address_id);
 
 -- =========================================================
--- 9. 테이블 소유 모듈 + 설명 (소유권의 단일 기준)
+-- 10. 테이블 소유 모듈 + 설명 (소유권의 단일 기준)
 --     형식: 'module:<모듈> | <설명>'. db/tests/architecture.sql 이 형식을 검사하고
 --     docs/erd.md 생성기(scripts/gen_erd.py)가 이 코멘트로 모듈별로 묶는다.
 -- =========================================================
 COMMENT ON TABLE app_user                IS 'module:identity | 사용자. 탈퇴하면 익명화하고 행은 유지한다';
-COMMENT ON TABLE auth_identity           IS 'module:identity | 로그인 수단(카카오/애플 등). (provider, provider_uid)로 식별';
-COMMENT ON TABLE family_group            IS 'module:groups | 가족 그룹. 월 마감 정책(마감일, 타임존, 미달 시 자동 미발행)';
-COMMENT ON TABLE family_member           IS 'module:groups | 그룹 구성원과 역할';
-COMMENT ON TABLE publication             IS 'module:groups | 그룹의 월간지';
+COMMENT ON TABLE auth_identity           IS 'module:identity | 로그인 수단(카카오/애플). (provider, provider_uid)로 식별';
+COMMENT ON TABLE family_group            IS 'module:groups | 가족 그룹. 방장(owner_id)과 월 마감 정책(마감일, 타임존, 미달 시 자동 미발행)';
+COMMENT ON TABLE family_member           IS 'module:groups | 그룹 구성원. 나가도 행은 남기고 left_at 만 채운다';
+COMMENT ON TABLE family_invite           IS 'module:groups | 카카오톡 초대 링크(토큰 해시, 만료, 사용 횟수, 취소). 방장만 만든다';
+COMMENT ON TABLE delivery_address        IS 'module:groups | 조부모님 배송지(주소만, 로그인 없음). 주문에는 복사본을 남긴다';
 COMMENT ON TABLE template                IS 'module:templates | 불변 버전의 판형 템플릿과 규모 제약(사진/페이지 수)';
 COMMENT ON TABLE page_master             IS 'module:templates | 페이지 마스터(슬롯 배치 정의)';
 COMMENT ON TABLE style                   IS 'module:templates | 문단/글자 스타일(상속 구조)';
 COMMENT ON TABLE font                    IS 'module:templates | 폰트 메타데이터';
-COMMENT ON TABLE issue                   IS 'module:issues | 월간 호. 상태는 change_issue_status()로만 바꾼다';
-COMMENT ON TABLE issue_member            IS 'module:issues | 호별 참여자의 역할과 제출 현황';
+COMMENT ON TABLE issue                   IS 'module:issues | 월간 호. 그 달의 게시물을 모아 만든 결과물. 상태는 change_issue_status()로만 바꾼다';
 COMMENT ON TABLE issue_status_history    IS 'module:issues | 호 상태 변경 이력';
 COMMENT ON TABLE issue_status_transition IS 'module:issues | 허용된 상태 전이 표';
-COMMENT ON TABLE social_account          IS 'module:intake | SNS 연동 계정(토큰은 참조만 저장)';
-COMMENT ON TABLE source_post             IS 'module:intake | 수집한 SNS 게시물 스냅샷';
-COMMENT ON TABLE media                   IS 'module:intake | 사진. 이미지 분석 결과와 선별 상태';
-COMMENT ON TABLE media_rendition         IS 'module:intake | 사진의 파생본(썸네일/미리보기/인쇄용)';
-COMMENT ON TABLE text_block              IS 'module:intake | 캡션/인용 등 본문 텍스트';
+COMMENT ON TABLE post                    IS 'module:feed | 피드 게시물(글). 호와 독립이고 posted_at 으로 어느 호에 실릴지 정해진다';
+COMMENT ON TABLE media                   IS 'module:feed | 게시물의 사진. 이미지 분석 결과와 사용자의 의도(꼭 넣기/빼기)';
+COMMENT ON TABLE media_rendition         IS 'module:feed | 사진의 파생본(썸네일/미리보기/인쇄용)';
+COMMENT ON TABLE issue_media             IS 'module:feed | 호별 사진 선별 결과(후보/선택/제외와 점수). 마감할 때 만들어진다';
+COMMENT ON TABLE text_block              IS 'module:feed | 호에 들어가는 글 조각(제목/캡션/인용/본문)';
 COMMENT ON TABLE layout_run              IS 'module:layout | 자동 조판 실행 1회(seed, 알고리즘 버전, 워커 임대 정보)';
 COMMENT ON TABLE page                    IS 'module:layout | 조판 결과의 페이지';
 COMMENT ON TABLE placement               IS 'module:layout | 페이지 위 요소 배치(mm 단위)';
 COMMENT ON TABLE preview                 IS 'module:layout | 페이지 미리보기 렌더 결과';
 COMMENT ON TABLE approval                IS 'module:review | 페이지 승인/수정 요청(승인한 조판 버전을 기록)';
 COMMENT ON TABLE override                IS 'module:review | 사람의 수정 로그(seq 순서)';
-COMMENT ON TABLE comment                 IS 'module:review | 페이지 코멘트';
 COMMENT ON TABLE page_lock               IS 'module:review | 페이지 편집 락';
 COMMENT ON TABLE print_job               IS 'module:printing | PDF 생성/프리플라이트 작업';
-COMMENT ON TABLE print_order             IS 'module:printing | 인쇄 주문과 배송';
+COMMENT ON TABLE print_order             IS 'module:printing | 인쇄 주문 1건 = 배송지 1곳. 받는 사람/주소는 주문 시점의 복사본';

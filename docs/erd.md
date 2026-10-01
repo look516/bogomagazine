@@ -14,25 +14,27 @@
 flowchart LR
     identity["identity<br/>2 tables"]
     templates["templates<br/>4 tables"]
-    groups["groups<br/>3 tables"]
-    issues["issues<br/>4 tables"]
-    intake["intake<br/>5 tables"]
+    groups["groups<br/>4 tables"]
+    issues["issues<br/>3 tables"]
+    feed["feed<br/>5 tables"]
     layout["layout<br/>4 tables"]
-    review["review<br/>4 tables"]
+    review["review<br/>3 tables"]
     printing["printing<br/>2 tables"]
-    groups -->|"3 FK"| identity
-    issues -->|"2 FK"| identity
+    groups -->|"2 FK"| identity
+    issues -->|"1 FK"| identity
     issues -->|"1 FK"| templates
     issues -->|"1 FK"| groups
-    intake -->|"4 FK"| identity
-    intake -->|"3 FK"| issues
+    feed -->|"1 FK"| identity
+    feed -->|"2 FK"| groups
+    feed -->|"2 FK"| issues
     layout -->|"3 FK"| templates
     layout -->|"1 FK"| issues
-    layout -->|"2 FK"| intake
-    review -->|"4 FK"| identity
-    review -->|"3 FK"| issues
-    review -->|"5 FK"| layout
+    layout -->|"2 FK"| feed
+    review -->|"3 FK"| identity
+    review -->|"2 FK"| issues
+    review -->|"4 FK"| layout
     printing -->|"1 FK"| identity
+    printing -->|"1 FK"| groups
     printing -->|"1 FK"| issues
     printing -->|"1 FK"| layout
 ```
@@ -46,24 +48,24 @@ erDiagram
     "layout_run" |o--o{ "approval" : "run_id, issue_id (cascade)"
     "app_user" ||--o{ "approval" : "user_id"
     "app_user" ||--o{ "auth_identity" : "user_id (cascade)"
-    "app_user" ||--o{ "comment" : "author_id"
-    "issue" ||--o{ "comment" : "issue_id (cascade)"
-    "page" |o--o{ "comment" : "page_id (cascade)"
+    "family_group" ||--o{ "delivery_address" : "group_id (cascade)"
+    "family_member" ||--o{ "delivery_address" : "group_id, created_by"
+    "family_member" ||--o{ "family_group" : "id, owner_id"
     "app_user" ||--o{ "family_group" : "owner_id"
+    "family_group" ||--o{ "family_invite" : "group_id (cascade)"
+    "family_member" ||--o{ "family_invite" : "group_id, created_by"
     "family_group" ||--o{ "family_member" : "group_id (cascade)"
     "app_user" ||--o{ "family_member" : "user_id"
     "font" |o--o{ "font" : "fallback"
-    "publication" ||--o{ "issue" : "publication_id"
+    "family_group" ||--o{ "issue" : "group_id"
     "template" ||--o{ "issue" : "template_id"
-    "issue" ||--o{ "issue_member" : "issue_id (cascade)"
-    "app_user" ||--o{ "issue_member" : "user_id"
+    "issue" ||--o{ "issue_media" : "issue_id, group_id (cascade)"
+    "media" ||--o{ "issue_media" : "media_id, group_id (cascade)"
     "app_user" |o--o{ "issue_status_history" : "changed_by"
     "issue" ||--o{ "issue_status_history" : "issue_id (cascade)"
     "issue" ||--o{ "layout_run" : "issue_id (cascade)"
     "template" ||--o{ "layout_run" : "template_id"
-    "issue" ||--o{ "media" : "issue_id (cascade)"
-    "source_post" |o--o{ "media" : "source_post_id, issue_id (set null)"
-    "app_user" ||--o{ "media" : "uploader_id"
+    "post" ||--o{ "media" : "post_id, group_id (cascade)"
     "media" ||--o{ "media_rendition" : "media_id (cascade)"
     "app_user" ||--o{ "override" : "author_id"
     "issue" ||--o{ "override" : "issue_id (cascade)"
@@ -77,23 +79,19 @@ erDiagram
     "page" ||--o{ "placement" : "page_id (cascade)"
     "style" |o--o{ "placement" : "style_id"
     "text_block" |o--o{ "placement" : "text_block_id"
+    "family_group" ||--o{ "post" : "group_id (cascade)"
+    "family_member" ||--o{ "post" : "group_id, author_id"
     "page" ||--o{ "preview" : "run_id, page_no (cascade)"
     "issue" ||--o{ "print_job" : "issue_id"
     "layout_run" ||--o{ "print_job" : "run_id, issue_id"
+    "delivery_address" |o--o{ "print_order" : "delivery_address_id (set null)"
     "app_user" ||--o{ "print_order" : "ordered_by"
     "print_job" ||--o{ "print_order" : "print_job_id"
-    "family_group" ||--o{ "publication" : "group_id"
-    "app_user" ||--o{ "publication" : "owner_id"
-    "app_user" ||--o{ "social_account" : "user_id"
-    "social_account" |o--o{ "source_post" : "account_id, contributor_id"
-    "social_account" |o--o{ "source_post" : "account_id, platform"
-    "app_user" ||--o{ "source_post" : "contributor_id"
-    "issue" ||--o{ "source_post" : "issue_id (cascade)"
     "style" |o--o{ "style" : "based_on"
     "template" ||--o{ "style" : "template_id (cascade)"
     "app_user" |o--o{ "text_block" : "created_by"
-    "issue" ||--o{ "text_block" : "issue_id (cascade)"
-    "source_post" |o--o{ "text_block" : "source_post_id, issue_id (set null)"
+    "issue" ||--o{ "text_block" : "issue_id, group_id (cascade)"
+    "post" |o--o{ "text_block" : "post_id, group_id (set null)"
     "issue_status_transition"
 ```
 
@@ -104,24 +102,18 @@ erDiagram
 ### identity
 
 - 참조하는 모듈: 없음 (바닥 모듈)
-- 이 모듈을 참조하는 모듈: groups, issues, intake, review, printing
+- 이 모듈을 참조하는 모듈: groups, issues, feed, review, printing
 
 ```mermaid
 erDiagram
     "app_user" ||--o{ "approval" : "user_id"
     "app_user" ||--o{ "auth_identity" : "user_id (cascade)"
-    "app_user" ||--o{ "comment" : "author_id"
     "app_user" ||--o{ "family_group" : "owner_id"
     "app_user" ||--o{ "family_member" : "user_id"
-    "app_user" ||--o{ "issue_member" : "user_id"
     "app_user" |o--o{ "issue_status_history" : "changed_by"
-    "app_user" ||--o{ "media" : "uploader_id"
     "app_user" ||--o{ "override" : "author_id"
     "app_user" ||--o{ "page_lock" : "user_id"
     "app_user" ||--o{ "print_order" : "ordered_by"
-    "app_user" ||--o{ "publication" : "owner_id"
-    "app_user" ||--o{ "social_account" : "user_id"
-    "app_user" ||--o{ "source_post" : "contributor_id"
     "app_user" |o--o{ "text_block" : "created_by"
     "app_user" {
         uuid id PK
@@ -146,29 +138,17 @@ erDiagram
         uuid id PK
         uuid user_id FK
     }
-    "comment" {
-        uuid id PK
-        uuid author_id FK
-    }
     "family_group" {
-        uuid id PK
+        uuid id PK, FK
         uuid owner_id FK
     }
     "family_member" {
         uuid group_id PK, FK
         uuid user_id PK, FK
     }
-    "issue_member" {
-        uuid issue_id PK, FK
-        uuid user_id PK, FK
-    }
     "issue_status_history" {
         bigint id PK
         uuid changed_by FK
-    }
-    "media" {
-        uuid id PK
-        uuid uploader_id FK
     }
     "override" {
         uuid id PK
@@ -181,18 +161,6 @@ erDiagram
     "print_order" {
         uuid id PK
         uuid ordered_by FK
-    }
-    "publication" {
-        uuid id PK
-        uuid owner_id FK
-    }
-    "social_account" {
-        uuid id PK
-        uuid user_id FK
-    }
-    "source_post" {
-        uuid id PK
-        uuid contributor_id FK
     }
     "text_block" {
         uuid id PK
@@ -275,18 +243,38 @@ erDiagram
 ### groups
 
 - 참조하는 모듈: identity
-- 이 모듈을 참조하는 모듈: issues
+- 이 모듈을 참조하는 모듈: issues, feed, printing
 
 ```mermaid
 erDiagram
+    "family_group" ||--o{ "delivery_address" : "group_id (cascade)"
+    "family_member" ||--o{ "delivery_address" : "group_id, created_by"
+    "family_member" ||--o{ "family_group" : "id, owner_id"
     "app_user" ||--o{ "family_group" : "owner_id"
+    "family_group" ||--o{ "family_invite" : "group_id (cascade)"
+    "family_member" ||--o{ "family_invite" : "group_id, created_by"
     "family_group" ||--o{ "family_member" : "group_id (cascade)"
     "app_user" ||--o{ "family_member" : "user_id"
-    "publication" ||--o{ "issue" : "publication_id"
-    "family_group" ||--o{ "publication" : "group_id"
-    "app_user" ||--o{ "publication" : "owner_id"
-    "family_group" {
+    "family_group" ||--o{ "issue" : "group_id"
+    "family_group" ||--o{ "post" : "group_id (cascade)"
+    "family_member" ||--o{ "post" : "group_id, author_id"
+    "delivery_address" |o--o{ "print_order" : "delivery_address_id (set null)"
+    "delivery_address" {
         uuid id PK
+        uuid group_id FK
+        text label
+        text recipient_name
+        text recipient_phone
+        text postal_code
+        text address_line1
+        text address_line2
+        text memo
+        uuid created_by FK
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    "family_group" {
+        uuid id PK, FK
         text name
         uuid owner_id FK
         int close_day
@@ -294,52 +282,62 @@ erDiagram
         bool auto_skip_below_min
         timestamptz created_at
     }
+    "family_invite" {
+        uuid id PK
+        uuid group_id FK
+        uuid created_by FK
+        text token_hash UK
+        timestamptz expires_at
+        int max_uses
+        int use_count
+        timestamptz revoked_at
+        timestamptz created_at
+    }
     "family_member" {
         uuid group_id PK, FK
         uuid user_id PK, FK
-        text role
+        text nickname
         timestamptz joined_at
-    }
-    "publication" {
-        uuid id PK
-        uuid group_id FK
-        text name
-        uuid owner_id FK
-        timestamptz created_at
+        timestamptz left_at
     }
     "app_user" {
         uuid id PK
     }
     "issue" {
         uuid id PK
-        uuid publication_id FK
+        uuid group_id FK
+    }
+    "post" {
+        uuid id PK
+        uuid group_id FK
+        uuid author_id FK
+    }
+    "print_order" {
+        uuid id PK
+        uuid delivery_address_id FK
     }
 ```
 
 ### issues
 
 - 참조하는 모듈: identity, templates, groups
-- 이 모듈을 참조하는 모듈: intake, layout, review, printing
+- 이 모듈을 참조하는 모듈: feed, layout, review, printing
 
 ```mermaid
 erDiagram
     "issue" ||--o{ "approval" : "issue_id (cascade)"
-    "issue" ||--o{ "comment" : "issue_id (cascade)"
-    "publication" ||--o{ "issue" : "publication_id"
+    "family_group" ||--o{ "issue" : "group_id"
     "template" ||--o{ "issue" : "template_id"
-    "issue" ||--o{ "issue_member" : "issue_id (cascade)"
-    "app_user" ||--o{ "issue_member" : "user_id"
+    "issue" ||--o{ "issue_media" : "issue_id, group_id (cascade)"
     "app_user" |o--o{ "issue_status_history" : "changed_by"
     "issue" ||--o{ "issue_status_history" : "issue_id (cascade)"
     "issue" ||--o{ "layout_run" : "issue_id (cascade)"
-    "issue" ||--o{ "media" : "issue_id (cascade)"
     "issue" ||--o{ "override" : "issue_id (cascade)"
     "issue" ||--o{ "print_job" : "issue_id"
-    "issue" ||--o{ "source_post" : "issue_id (cascade)"
-    "issue" ||--o{ "text_block" : "issue_id (cascade)"
+    "issue" ||--o{ "text_block" : "issue_id, group_id (cascade)"
     "issue" {
         uuid id PK
-        uuid publication_id FK
+        uuid group_id FK
         text title
         date period_start
         date period_end
@@ -356,13 +354,6 @@ erDiagram
         int max_pages
         int page_multiple
         timestamptz created_at
-    }
-    "issue_member" {
-        uuid issue_id PK, FK
-        uuid user_id PK, FK
-        text role
-        text submit_status
-        timestamptz submitted_at
     }
     "issue_status_history" {
         bigint id PK
@@ -385,15 +376,15 @@ erDiagram
         uuid id PK
         uuid issue_id FK
     }
-    "comment" {
-        uuid id PK
-        uuid issue_id FK
+    "family_group" {
+        uuid id PK, FK
+    }
+    "issue_media" {
+        uuid issue_id PK, FK
+        uuid media_id PK, FK
+        uuid group_id FK
     }
     "layout_run" {
-        uuid id PK
-        uuid issue_id FK
-    }
-    "media" {
         uuid id PK
         uuid issue_id FK
     }
@@ -405,48 +396,46 @@ erDiagram
         uuid id PK
         uuid issue_id FK
     }
-    "publication" {
-        uuid id PK
-    }
-    "source_post" {
-        uuid id PK
-        uuid issue_id FK
-    }
     "template" {
         uuid id PK
     }
     "text_block" {
         uuid id PK
         uuid issue_id FK
+        uuid group_id FK
     }
 ```
 
-### intake
+### feed
 
-- 참조하는 모듈: identity, issues
+- 참조하는 모듈: identity, groups, issues
 - 이 모듈을 참조하는 모듈: layout
 
 ```mermaid
 erDiagram
-    "issue" ||--o{ "media" : "issue_id (cascade)"
-    "source_post" |o--o{ "media" : "source_post_id, issue_id (set null)"
-    "app_user" ||--o{ "media" : "uploader_id"
+    "issue" ||--o{ "issue_media" : "issue_id, group_id (cascade)"
+    "media" ||--o{ "issue_media" : "media_id, group_id (cascade)"
+    "post" ||--o{ "media" : "post_id, group_id (cascade)"
     "media" ||--o{ "media_rendition" : "media_id (cascade)"
     "media" |o--o{ "placement" : "media_id"
     "text_block" |o--o{ "placement" : "text_block_id"
-    "app_user" ||--o{ "social_account" : "user_id"
-    "social_account" |o--o{ "source_post" : "account_id, contributor_id"
-    "social_account" |o--o{ "source_post" : "account_id, platform"
-    "app_user" ||--o{ "source_post" : "contributor_id"
-    "issue" ||--o{ "source_post" : "issue_id (cascade)"
+    "family_group" ||--o{ "post" : "group_id (cascade)"
+    "family_member" ||--o{ "post" : "group_id, author_id"
     "app_user" |o--o{ "text_block" : "created_by"
-    "issue" ||--o{ "text_block" : "issue_id (cascade)"
-    "source_post" |o--o{ "text_block" : "source_post_id, issue_id (set null)"
+    "issue" ||--o{ "text_block" : "issue_id, group_id (cascade)"
+    "post" |o--o{ "text_block" : "post_id, group_id (set null)"
+    "issue_media" {
+        uuid issue_id PK, FK
+        uuid media_id PK, FK
+        uuid group_id FK
+        text selection_status
+        real selection_score
+        timestamptz created_at
+    }
     "media" {
         uuid id PK
-        uuid issue_id FK
-        uuid source_post_id FK
-        uuid uploader_id FK
+        uuid post_id FK
+        uuid group_id FK
         text kind
         text storage_key
         text sha256
@@ -459,10 +448,9 @@ erDiagram
         jsonb saliency
         real quality_score
         bigint phash
-        text selection_status
-        bool pinned
-        real selection_score
         bool rights_ok
+        bool pinned
+        bool excluded
         timestamptz created_at
     }
     "media_rendition" {
@@ -472,34 +460,21 @@ erDiagram
         int width
         int height
     }
-    "social_account" {
+    "post" {
         uuid id PK
-        uuid user_id FK
-        text platform
-        text external_id
-        text token_ref
-        timestamptz consent_at
-        jsonb consent_scope
-    }
-    "source_post" {
-        uuid id PK
-        uuid issue_id FK
-        uuid contributor_id FK
-        uuid account_id FK
-        text platform FK
-        text external_post_id
+        uuid group_id FK
+        uuid author_id FK
+        text body
         timestamptz posted_at
-        text caption
-        text[] hashtags
-        text location
-        jsonb engagement
-        jsonb raw
         timestamptz created_at
+        timestamptz updated_at
+        timestamptz deleted_at
     }
     "text_block" {
         uuid id PK
         uuid issue_id FK
-        uuid source_post_id FK
+        uuid group_id FK
+        uuid post_id FK
         text kind
         text body
         jsonb runs
@@ -508,6 +483,13 @@ erDiagram
     }
     "app_user" {
         uuid id PK
+    }
+    "family_group" {
+        uuid id PK, FK
+    }
+    "family_member" {
+        uuid group_id PK, FK
+        uuid user_id PK, FK
     }
     "issue" {
         uuid id PK
@@ -521,14 +503,13 @@ erDiagram
 
 ### layout
 
-- 참조하는 모듈: templates, issues, intake
+- 참조하는 모듈: templates, issues, feed
 - 이 모듈을 참조하는 모듈: review, printing
 
 ```mermaid
 erDiagram
     "page" |o--o{ "approval" : "page_id, run_id (cascade)"
     "layout_run" |o--o{ "approval" : "run_id, issue_id (cascade)"
-    "page" |o--o{ "comment" : "page_id (cascade)"
     "issue" ||--o{ "layout_run" : "issue_id (cascade)"
     "template" ||--o{ "layout_run" : "template_id"
     "layout_run" ||--o{ "override" : "run_id, issue_id (cascade)"
@@ -599,10 +580,6 @@ erDiagram
         uuid page_id FK
         uuid run_id FK
     }
-    "comment" {
-        uuid id PK
-        uuid page_id FK
-    }
     "issue" {
         uuid id PK
     }
@@ -647,9 +624,6 @@ erDiagram
     "page" |o--o{ "approval" : "page_id, run_id (cascade)"
     "layout_run" |o--o{ "approval" : "run_id, issue_id (cascade)"
     "app_user" ||--o{ "approval" : "user_id"
-    "app_user" ||--o{ "comment" : "author_id"
-    "issue" ||--o{ "comment" : "issue_id (cascade)"
-    "page" |o--o{ "comment" : "page_id (cascade)"
     "app_user" ||--o{ "override" : "author_id"
     "issue" ||--o{ "override" : "issue_id (cascade)"
     "layout_run" ||--o{ "override" : "run_id, issue_id (cascade)"
@@ -665,16 +639,6 @@ erDiagram
         uuid user_id FK
         text status
         text comment
-        timestamptz created_at
-    }
-    "comment" {
-        uuid id PK
-        uuid issue_id FK
-        uuid page_id FK
-        jsonb anchor
-        uuid author_id FK
-        text body
-        bool resolved
         timestamptz created_at
     }
     "override" {
@@ -709,13 +673,14 @@ erDiagram
 
 ### printing
 
-- 참조하는 모듈: identity, issues, layout
+- 참조하는 모듈: identity, groups, issues, layout
 - 이 모듈을 참조하는 모듈: 없음
 
 ```mermaid
 erDiagram
     "issue" ||--o{ "print_job" : "issue_id"
     "layout_run" ||--o{ "print_job" : "run_id, issue_id"
+    "delivery_address" |o--o{ "print_order" : "delivery_address_id (set null)"
     "app_user" ||--o{ "print_order" : "ordered_by"
     "print_job" ||--o{ "print_order" : "print_job_id"
     "print_job" {
@@ -737,16 +702,24 @@ erDiagram
         uuid id PK
         bigint seq
         uuid print_job_id FK
+        uuid delivery_address_id FK
         uuid ordered_by FK
+        text recipient_name
+        text recipient_phone
+        text postal_code
+        text address_line1
+        text address_line2
         text vendor
         int quantity
-        jsonb shipping
         numeric price
         text status
         text tracking
         timestamptz created_at
     }
     "app_user" {
+        uuid id PK
+    }
+    "delivery_address" {
         uuid id PK
     }
     "issue" {
@@ -762,30 +735,29 @@ erDiagram
 | 모듈 | 테이블 | 컬럼 수 | 설명 |
 |---|---|---|---|
 | identity | `app_user` | 5 | 사용자. 탈퇴하면 익명화하고 행은 유지한다 |
-| identity | `auth_identity` | 10 | 로그인 수단(카카오/애플 등). (provider, provider_uid)로 식별 |
+| identity | `auth_identity` | 10 | 로그인 수단(카카오/애플). (provider, provider_uid)로 식별 |
 | templates | `font` | 8 | 폰트 메타데이터 |
 | templates | `page_master` | 5 | 페이지 마스터(슬롯 배치 정의) |
 | templates | `style` | 6 | 문단/글자 스타일(상속 구조) |
 | templates | `template` | 12 | 불변 버전의 판형 템플릿과 규모 제약(사진/페이지 수) |
-| groups | `family_group` | 7 | 가족 그룹. 월 마감 정책(마감일, 타임존, 미달 시 자동 미발행) |
-| groups | `family_member` | 4 | 그룹 구성원과 역할 |
-| groups | `publication` | 5 | 그룹의 월간지 |
-| issues | `issue` | 18 | 월간 호. 상태는 change_issue_status()로만 바꾼다 |
-| issues | `issue_member` | 5 | 호별 참여자의 역할과 제출 현황 |
+| groups | `delivery_address` | 12 | 조부모님 배송지(주소만, 로그인 없음). 주문에는 복사본을 남긴다 |
+| groups | `family_group` | 7 | 가족 그룹. 방장(owner_id)과 월 마감 정책(마감일, 타임존, 미달 시 자동 미발행) |
+| groups | `family_invite` | 9 | 카카오톡 초대 링크(토큰 해시, 만료, 사용 횟수, 취소). 방장만 만든다 |
+| groups | `family_member` | 5 | 그룹 구성원. 나가도 행은 남기고 left_at 만 채운다 |
+| issues | `issue` | 18 | 월간 호. 그 달의 게시물을 모아 만든 결과물. 상태는 change_issue_status()로만 바꾼다 |
 | issues | `issue_status_history` | 7 | 호 상태 변경 이력 |
 | issues | `issue_status_transition` | 3 | 허용된 상태 전이 표 |
-| intake | `media` | 21 | 사진. 이미지 분석 결과와 선별 상태 |
-| intake | `media_rendition` | 5 | 사진의 파생본(썸네일/미리보기/인쇄용) |
-| intake | `social_account` | 7 | SNS 연동 계정(토큰은 참조만 저장) |
-| intake | `source_post` | 13 | 수집한 SNS 게시물 스냅샷 |
-| intake | `text_block` | 8 | 캡션/인용 등 본문 텍스트 |
+| feed | `issue_media` | 6 | 호별 사진 선별 결과(후보/선택/제외와 점수). 마감할 때 만들어진다 |
+| feed | `media` | 19 | 게시물의 사진. 이미지 분석 결과와 사용자의 의도(꼭 넣기/빼기) |
+| feed | `media_rendition` | 5 | 사진의 파생본(썸네일/미리보기/인쇄용) |
+| feed | `post` | 8 | 피드 게시물(글). 호와 독립이고 posted_at 으로 어느 호에 실릴지 정해진다 |
+| feed | `text_block` | 9 | 호에 들어가는 글 조각(제목/캡션/인용/본문) |
 | layout | `layout_run` | 21 | 자동 조판 실행 1회(seed, 알고리즘 버전, 워커 임대 정보) |
 | layout | `page` | 4 | 조판 결과의 페이지 |
 | layout | `placement` | 13 | 페이지 위 요소 배치(mm 단위) |
 | layout | `preview` | 6 | 페이지 미리보기 렌더 결과 |
 | review | `approval` | 10 | 페이지 승인/수정 요청(승인한 조판 버전을 기록) |
-| review | `comment` | 8 | 페이지 코멘트 |
 | review | `override` | 9 | 사람의 수정 로그(seq 순서) |
 | review | `page_lock` | 3 | 페이지 편집 락 |
 | printing | `print_job` | 13 | PDF 생성/프리플라이트 작업 |
-| printing | `print_order` | 11 | 인쇄 주문과 배송 |
+| printing | `print_order` | 16 | 인쇄 주문 1건 = 배송지 1곳. 받는 사람/주소는 주문 시점의 복사본 |

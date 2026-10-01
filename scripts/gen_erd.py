@@ -10,7 +10,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 
-MODULE_ORDER = ["identity", "templates", "groups", "issues", "intake", "layout", "review", "printing"]
+MODULE_ORDER = ["identity", "templates", "groups", "issues", "feed", "layout", "review", "printing"]
 ON_DELETE = {"c": "cascade", "n": "set null", "d": "set default"}  # a/r(기본) 은 표시하지 않음
 
 TYPE_MAP = {

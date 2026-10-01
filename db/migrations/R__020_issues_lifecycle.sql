@@ -151,8 +151,7 @@ DROP VIEW IF EXISTS v_issue_progress;
 CREATE VIEW v_issue_progress AS
 SELECT
     i.id                AS issue_id,
-    i.publication_id,
-    p.group_id,
+    i.group_id,
     i.title,
     i.period_start,
     i.period_end,
@@ -166,7 +165,6 @@ SELECT
 
     mem.total_members,
     mem.submitted_members,
-    mem.skipped_members,
 
     md.total_media,
     md.selected_media,
@@ -204,18 +202,22 @@ SELECT
         WHEN 'archived'         THEN 100
     END, 0)::int AS progress_pct
 FROM issue i
-JOIN publication p ON p.id = i.publication_id
+JOIN family_group g ON g.id = i.group_id
 LEFT JOIN LATERAL (
-    SELECT count(*) FILTER (WHERE role <> 'viewer')::int                                AS total_members,
-           count(*) FILTER (WHERE role <> 'viewer' AND submit_status = 'submitted')::int AS submitted_members,
-           count(*) FILTER (WHERE role <> 'viewer' AND submit_status = 'skipped')::int   AS skipped_members
-      FROM issue_member WHERE issue_id = i.id
+    -- 구성원 = 이 그룹에서 활동 중인 사람, 제출 = 이 호의 기간에 글을 올린 사람
+    SELECT count(*)::int AS total_members,
+           count(*) FILTER (WHERE EXISTS (
+               SELECT 1 FROM post po
+                WHERE po.group_id = fm.group_id AND po.author_id = fm.user_id AND po.deleted_at IS NULL
+                  AND (po.posted_at AT TIME ZONE g.timezone)::date BETWEEN i.period_start AND i.period_end))::int AS submitted_members
+      FROM family_member fm
+     WHERE fm.group_id = i.group_id AND fm.left_at IS NULL
 ) mem ON true
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS total_media,
            count(*) FILTER (WHERE selection_status = 'selected')::int AS selected_media,
            count(*) FILTER (WHERE selection_status IN ('excluded_auto','excluded_manual'))::int AS excluded_media
-      FROM media WHERE issue_id = i.id
+      FROM issue_media WHERE issue_id = i.id
 ) md ON true
 LEFT JOIN LATERAL (
     SELECT id AS run_id, status AS run_status
@@ -277,46 +279,3 @@ CROSS JOIN LATERAL (
         WHEN 'archived' THEN 'archived'
     END AS current_step
 ) step;
-
--- =========================================================
--- 5. 업로드 라우팅 (issues 소속: 그룹의 수집 중인 호를 고르는 함수): 그룹의 사진이 어느 호로 들어가야 하는가
---    마감 유예(close_day > 1) 동안은 호 두 개가 동시에 collecting 일 수 있다.
---      1순위: 촬영/게시 시각(그룹 타임존)이 기간에 속하는 collecting 호
---      2순위: 가장 이른 collecting 호 (전달이 닫혔으면 이번 달로 넘어감)
---    수집 중인 호가 없으면 NULL -> 앱은 사용자에게 "마감되었습니다"를 보여주고,
---    관리자가 필요하면 change_issue_status(호, 'collecting', ..., 새 close_at)로 재오픈한다.
--- =========================================================
-CREATE OR REPLACE FUNCTION upload_target_issue(p_group uuid, p_ts timestamptz DEFAULT now())
-RETURNS uuid
-LANGUAGE sql STABLE AS $$
-    SELECT i.id
-      FROM issue i
-      JOIN publication p ON p.id = i.publication_id
-      JOIN family_group g ON g.id = p.group_id
-     WHERE g.id = p_group AND i.status = 'collecting'
-     ORDER BY ((p_ts AT TIME ZONE g.timezone)::date BETWEEN i.period_start AND i.period_end) DESC,
-              i.period_start
-     LIMIT 1
-$$;
-
--- =========================================================
--- 6. 정합성 가드: 호 참여자는 그 호가 속한 가족 그룹의 구성원이어야 한다
---    (그룹 밖의 사람이 호에 들어오면 그 호의 사진/조판/승인에 접근할 수 있게 되는 권한 구멍을 막는다)
--- =========================================================
-CREATE OR REPLACE FUNCTION guard_issue_member_in_group() RETURNS trigger
-LANGUAGE plpgsql AS $$
-BEGIN
-    IF NOT EXISTS (SELECT 1
-                     FROM issue i
-                     JOIN publication p ON p.id = i.publication_id
-                     JOIN family_member fm ON fm.group_id = p.group_id
-                    WHERE i.id = NEW.issue_id AND fm.user_id = NEW.user_id) THEN
-        RAISE EXCEPTION 'issue_member: user % is not a member of the family group of issue %', NEW.user_id, NEW.issue_id
-            USING ERRCODE = 'check_violation';
-    END IF;
-    RETURN NEW;
-END $$;
-
-DROP TRIGGER IF EXISTS trg_issue_member_group ON issue_member;
-CREATE TRIGGER trg_issue_member_group BEFORE INSERT OR UPDATE OF issue_id, user_id ON issue_member
-    FOR EACH ROW EXECUTE FUNCTION guard_issue_member_in_group();

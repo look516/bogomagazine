@@ -13,7 +13,8 @@ DB는 Flyway 마이그레이션(`db/migrations`)으로 관리한다: 테이블�
 | GET | `/issues/{issueId}/progress` | 호 1건의 진행 상세 |
 | GET | `/issues/{issueId}/timeline` | 상태 변경 이력 (`issue_status_history`) |
 
-권한: 해당 그룹의 `family_member`(admin / member / viewer) 모두 조회 가능. 비회원은 404(존재 여부 노출 금지).
+권한: 해당 그룹의 활동 중인 구성원(방장 포함, `family_member.left_at IS NULL`)이면 누구나 조회 가능. 그 외는 404(존재 여부 노출 금지).
+DB는 조회 권한을 강제하지 않는다. API가 쿼리마다 `group_id`(또는 호의 그룹)와 구성원 여부를 확인해야 한다 ([architecture.md](architecture.md)의 "권한").
 
 ## 2. 응답: `GET /issues/{issueId}/progress`
 
@@ -32,16 +33,18 @@ DB는 Flyway 마이그레이션(`db/migrations`)으로 관리한다: 테이블�
   "deadline": {"closeAt": "2026-10-01T00:00:00+09:00", "isOverdue": false},
   "closeFailure": {"attempts": 0, "error": null},
 
-  "submissions": {"total": 4, "submitted": 1, "skipped": 0},
-  "media": {"total": 100, "selected": 0, "excluded": 0, "min": 15, "max": 60},
+  "submissions": {"total": 4, "submitted": 1},
+  "media": {"total": 0, "selected": 0, "excluded": 0, "min": 15, "max": 60},
   "layout": {"latestRunId": null, "latestRunStatus": null},
   "review": {"totalPages": 0, "approvedPages": 0, "changesRequestedPages": 0, "staleApprovalPages": 0},
   "print": {"jobStatus": null, "orderStatus": null}
 }
 ```
 
+**`media`(호별 선별 결과)는 마감 때 `select_media()`가 만들기 때문에 수집 중에는 모두 0이다.** 수집 중에 "이번 달 올라온 사진 수"를 보여 주려면 API가 `post`/`media`를 기간으로 직접 센다.
+
 필드는 뷰 컬럼과 1:1: `status`, `current_step`, `progress_pct`, `close_at`, `is_overdue`,
-`close_attempts/close_error`, `total_members/submitted_members/skipped_members`,
+`close_attempts/close_error`, `total_members/submitted_members`,
 `total/selected/excluded_media`, `latest_run_*`,
 `total/approved/changes_requested/stale_approval_pages`, `print_job_status`, `print_order_status`.
 
@@ -78,7 +81,7 @@ DB는 Flyway 마이그레이션(`db/migrations`)으로 관리한다: 테이블�
 
 | 값 | 조건 | 진행률 |
 |---|---|---|
-| `collecting` | status=collecting | 0~20 (제출자 비율, 참여자 0명이면 0) |
+| `collecting` | status=collecting | 0~20 (이번 달 글을 올린 구성원 비율, 구성원 0명이면 0) |
 | `close_failed` | collecting, 마감 처리가 5회 실패 | 20 |
 | `selecting` | closing, 조판 실행 기록 없음, 선별된 사진 0 | 30 |
 | `composing` | closing, 조판 진행 중이거나 결과 대기 | 40 |
@@ -96,7 +99,7 @@ DB는 Flyway 마이그레이션(`db/migrations`)으로 관리한다: 테이블�
 
 ### 판정 기준 (알아둘 것)
 
-- **제출 인원**: `issue_member.role`이 `viewer`가 아닌 사람만 센다.
+- **제출 인원**: 총원은 그 그룹의 **활동 중인 구성원**(나간 사람 제외), 제출은 그중 **이 호의 기간(그룹 타임존 날짜)에 글을 올린 사람**(삭제한 글 제외)이다. 호 참여자 행은 따로 없다.
 - **페이지 승인**: 페이지별로 **가장 최근 승인 기록 1건**만 본다. 최근 기록이 `approved`여도, 그 승인 뒤에
   **같은 조판 실행에서 이 페이지(또는 이 페이지의 배치/사진)를 대상으로 한 수정(`override`)이 생기면
   무효(`staleApprovalPages`)** 로 센다. 승인 기록의 `run_id`/`override_seq`는 트리거가 자동으로 채운다.
@@ -126,16 +129,19 @@ DB는 Flyway 마이그레이션(`db/migrations`)으로 관리한다: 테이블�
 
 목록은 요약 필드만 내려주고 상세는 `/progress`로 조회한다. `month` 파라미터는 `period_start`가 해당 월에 속하는 호를 찾는다.
 
-## 5. 업로드 규칙 ([R__030_intake_guards.sql](../db/migrations/R__030_intake_guards.sql))
+## 5. 게시 규칙 ([R__030_feed_guards.sql](../db/migrations/R__030_feed_guards.sql))
 
-- 사진(`media`)과 게시물(`source_post`)은 **호가 `collecting`일 때만** 들어간다. 그 외에는 DB가 거부한다.
-  마감 배치와는 행 잠금으로 직렬화되어, 선별이 끝난 뒤에 들어온 사진이 조용히 누락되지 않는다.
+글(`post`)은 앱 피드에 올라가며 **호와 독립**이다. 어느 호에 실리는지는 `posted_at`(그룹 타임존 날짜)이 어느 호의 기간에 속하는지로 정해진다.
+
+- 글과 사진은 그 기간의 호가 **`collecting`이거나 아직 만들어지지 않았을 때만** 들어간다. 호가 마감되었으면 DB가 거부한다.
+  마감 배치와는 행 잠금으로 직렬화되어, 선별이 끝난 뒤에 들어온 글/사진이 조용히 누락되지 않는다.
+- 글의 날짜(`posted_at`)를 마감된 기간으로 옮기는 것도 거부한다.
+- 작성자는 그 그룹의 **활동 중인 구성원**이어야 한다 (나간 사람, 다른 그룹 사람 거부).
 - DB는 `close_at` 시각 자체를 강제하지 않는다. 배치가 호를 닫기 전까지는 받는다. 마감 시각을 엄격히
-  적용하려면 앱이 `close_at`을 먼저 확인할 것.
-- **어느 호로 넣을지**: `upload_target_issue(groupId, 촬영/게시 시각)`이 정한다 (함수는 [R__020_issues_lifecycle.sql](../db/migrations/R__020_issues_lifecycle.sql)에 있다).
-  1순위는 그 시각(그룹 타임존)이 기간에 속하는 수집 중 호, 2순위는 가장 이른 수집 중 호.
-  수집 중인 호가 없으면 `NULL` → 앱은 "마감되었습니다"를 보여준다. 관리자가 늦은 사진을 받아야 하면
+  적용하려면 앱이 `close_at`을 먼저 확인할 것. 마감 후 늦은 글을 받아야 하면 방장이
   `change_issue_status(호, 'collecting', 사용자, 사유, 새_close_at)`으로 재오픈한다.
+- 글을 지울 때는 `deleted_at`을 채운다(숨김). 마감된 호의 내용은 바뀌지 않으며, 조판에 배치된 사진을 가진 글은 **물리 삭제가 거부된다**.
+- 사진 파일은 서버를 거치지 않고 올리고(직접 업로드), 업로드가 끝난 뒤 `media` 행을 만든다. `rights_ok=false`는 선별에서 제외된다.
 
 ## 6. 월 마감 배치 ([R__050_issues_batch.sql](../db/migrations/R__050_issues_batch.sql))
 
@@ -144,8 +150,7 @@ DB는 Flyway 마이그레이션(`db/migrations`)으로 관리한다: 테이블�
 길어지지 않도록, 호출자는 마감 처리 결과(`closing`/`skipped`)가 0건이 될 때까지 반복 호출한다.
 
 1. **마감**: `close_at`이 지난 `collecting` 호를 처리한다 (`FOR UPDATE SKIP LOCKED`라 동시 실행 가능).
-   - 사진을 올린 참여자는 `submitted`, 안 올린 참여자는 `skipped`로 확정
-   - 사진 선별(`select_media`) 실행
+   - 그 기간의 글(삭제한 글 제외)에서 사진 선별(`select_media`) 실행 → 결과는 `issue_media`에 기록 (사용자가 "꼭 넣기"/"빼기"한 사진은 존중)
    - 선별 사진이 `min_photos` 미만이면 `skipped`(미발행), 아니면 `closing`
    - 그룹이 `auto_skip_below_min = false`이면 부족해도 `closing`으로 진행
 2. **호 생성**: 마감 대상이 한 번에 처리할 수 있는 건수보다 적게 남았을 때, 그룹 타임존 기준 이번 달 호가 없으면 만든다.
@@ -171,20 +176,41 @@ DB는 Flyway 마이그레이션(`db/migrations`)으로 관리한다: 테이블�
 호 하나의 처리가 실패해도 다른 호는 계속 처리한다. 실패는 `close_attempts`/`close_error`에 기록되고,
 5회 실패하면 자동 재시도에서 빠져 `close_failed`로 표시된다 (운영자가 원인을 고친 뒤 재오픈/재시도).
 
-## 7. 회원 탈퇴 ([R__070_identity_privacy.sql](../db/migrations/R__070_identity_privacy.sql))
+## 7. 가족 그룹 / 초대 / 배송지 ([R__005_groups_membership.sql](../db/migrations/R__005_groups_membership.sql))
+
+로그인은 카카오/애플만 가능하다(`auth_identity.provider`). 애플은 이메일을 숨길 수 있어 **이메일이 아니라 초대 링크 토큰**으로 가족을 합류시킨다.
+**아래 함수들은 `p_actor`를 앱이 넘긴 값으로 믿는다.** 로그인한 사용자 id를 그대로 넘길 것 (DB 권한 분리는 TODO).
+
+| 하는 일 | 호출 | 규칙 |
+|---|---|---|
+| 그룹 만들기 | `create_family_group(이름, 만든사람, 호칭)` | 만든 사람이 방장이자 첫 구성원. 반드시 이 함수로 (그룹과 방장 구성원은 한 트랜잭션) |
+| 초대 링크 만들기 | `INSERT INTO family_invite (group_id, created_by, token_hash, expires_at, max_uses)` | **방장만**. 앱이 무작위 토큰을 만들어 **sha256 hex(64자)만 저장**하고 원문은 카카오톡 링크에만 싣는다. 만료/최대 사용 횟수 필수 설정 권장 |
+| 초대 취소 | `UPDATE family_invite SET revoked_at = now()` | 방장 확인은 앱이 한다 (DB는 검사하지 않음) |
+| 초대 수락 | `accept_family_invite(토큰해시, 사용자)` → 그룹 id | 없는 링크/취소/만료/횟수 초과는 예외. 이미 구성원이면 횟수를 쓰지 않고 성공(링크를 두 번 눌러도 안전). 나갔던 사람은 복귀. 항상 일반 구성원 |
+| 나가기 / 내보내기 | `remove_family_member(그룹, 행위자, 대상)` | 본인은 누구나, 타인은 방장만. **방장은 나갈 수 없다(먼저 넘길 것)**. 행은 남고 `left_at`만 채워진다 |
+| 방장 넘기기 | `transfer_family_owner(그룹, 행위자, 새방장)` | 현재 방장만, 새 방장은 활동 중인 구성원 |
+| 조부모님 배송지 | `INSERT INTO delivery_address (...)` | 활동 중인 구성원이 등록. **로그인하지 않는 수신자라 주소/전화/메모만 저장** |
+| 주문 | `INSERT INTO print_order (...)` | 배송지마다 1건. **주문 시점의 받는 사람/주소를 복사해 넣는다** (배송지를 나중에 고치거나 지워도 주문 기록은 그대로, `delivery_address_id`는 NULL이 될 수 있음) |
+
+- 초대 수락은 방장이 내보낸 사람이 **옛 링크로 다시 들어올 수 있다.** 내보낸 뒤에는 링크를 취소할 것.
+- 전화번호/주소는 개인정보다. 현재는 평문 컬럼이며 암호화/접근 제한은 TODO.
+
+## 8. 회원 탈퇴 ([R__070_identity_privacy.sql](../db/migrations/R__070_identity_privacy.sql))
 
 `anonymize_user(userId)`는 사용자를 **지우지 않고 익명화**한다 (기록이 깨지지 않게).
-- 제거: 이메일/이름, 로그인 수단(`auth_identity`), SNS 연동 토큰·동의 정보, 그룹 멤버십, 수집 중인 호의 참여 기록
-- 유지: 사진/게시물/캡션 등 **콘텐츠**, 지난 호의 참여 기록 — 삭제 범위는 정책 결정 대기 중
+- 제거: 이메일/이름, 로그인 수단(`auth_identity`), 페이지 편집 락
+- 변경: 그룹 구성원 행은 남기고 `left_at`을 채운다 (이후 글/승인/주문 불가)
+- 유지: 사진/글 등 **콘텐츠**, 승인/수정 기록 — 삭제 범위는 정책 결정 대기 중
 - 반환: 외부 시크릿 저장소에서 **폐기해야 할 토큰 참조 목록** (DB 밖이라 DB가 지울 수 없다. 앱이 반드시 폐기할 것)
-- 그룹/출판물 소유자는 소유권을 넘기기 전에는 거부된다. 여러 번 호출해도 안전하다.
+- **방장은 방장을 넘기기 전에는 거부된다.** 여러 번 호출해도 안전하다.
 - 탈퇴한 사용자의 카카오/애플 계정은 연결이 완전히 풀려 같은 계정으로 다시 가입할 수 있다.
 
-## 8. 아직 정해지지 않은 것
+## 9. 아직 정해지지 않은 것
 
 - **다중 승인 정책**: 가족 중 몇 명이 승인해야 `approved`로 넘길지. 지금은 쓰기 API가 판단해 `change_issue_status()`를 호출한다.
 - **탈퇴 시 콘텐츠 처리**: 사용자가 올린 사진/게시물(`raw` 포함)과 본문을 지울지, 남길지, 가족이 승인한 호는 어떻게 할지.
 - **마감 시각 강제 / 업로드 유예**, **DB 권한 분리**: 설계안만 있고 미적용.
-- **마감 임박 알림**: 아직 안 올린 참여자에게 알림을 보내는 기능은 없다 (`submit_status = 'pending'`으로 대상 조회는 가능).
+- **마감 임박 알림**: 이번 달 글을 아직 안 올린 구성원에게 알림을 보내는 기능은 없다 (대상은 `v_issue_progress`의 제출 기준으로 조회 가능).
+- **주문 권한**: 지금은 활동 중인 구성원 누구나 주문할 수 있다. 방장만으로 좁힐지 정하지 않았다.
 - **재인쇄/정정 인쇄**: `printed` 이후의 정정은 `archived`로만 갈 수 있다. 주문 취소는 `order_cancelled`로 표시만 한다.
 - **실시간 갱신**: 폴링으로 시작하고, 필요해지면 SSE/WebSocket으로 확장한다.

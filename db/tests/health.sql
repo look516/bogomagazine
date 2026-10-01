@@ -10,8 +10,8 @@ BEGIN
     FROM pg_constraint c
     JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
    WHERE c.contype = 'f' AND array_length(c.conkey, 1) = 1
-     AND c.confrelid::regclass::text IN ('issue','page','layout_run','print_job','source_post',
-                                         'publication','family_group','media','social_account')
+     AND c.confrelid::regclass::text IN ('issue','page','layout_run','print_job','post',
+                                         'family_group','family_member','media','delivery_address','text_block')
      AND NOT EXISTS (SELECT 1 FROM pg_index ix WHERE ix.indrelid = c.conrelid AND ix.indkey[0] = a.attnum);
   ASSERT missing IS NULL, 'T61 인덱스 없는 FK: ' || COALESCE(missing, '');
 END $$;
@@ -22,8 +22,8 @@ DO $$
 DECLARE missing text; plan text := ''; line text;
 BEGIN
   SELECT string_agg(v.t || '.' || v.c, ', ') INTO missing
-    FROM (VALUES ('family_member','user_id'), ('issue_member','user_id'), ('media','uploader_id'),
-                 ('source_post','contributor_id'), ('social_account','user_id')) v(t, c)
+    FROM (VALUES ('family_member','user_id'), ('post','group_id'), ('media','post_id'),
+                 ('issue_media','media_id'), ('family_invite','group_id'), ('delivery_address','group_id')) v(t, c)
    WHERE NOT EXISTS (SELECT 1 FROM pg_index ix JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = ix.indkey[0]
                       WHERE ix.indrelid = v.t::regclass AND a.attname = v.c);
   ASSERT missing IS NULL, 'T64 인덱스 없음: ' || COALESCE(missing, '');

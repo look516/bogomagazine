@@ -23,7 +23,7 @@
 -- change_issue_status(issue, 'review') 로 넘긴다.
 --
 -- 동시 실행: 마감은 FOR UPDATE SKIP LOCKED 라서 여러 러너가 동시에 돌아도 같은 호를 두 번 처리하지 않고,
---           호 생성은 UNIQUE(publication_id, period_start) + ON CONFLICT 로 안전하다.
+--           호 생성은 UNIQUE(group_id, period_start) + ON CONFLICT 로 안전하다.
 
 -- =========================================================
 -- 1. 이번 달 호 생성
@@ -35,7 +35,6 @@ RETURNS TABLE (o_group_id uuid, o_issue_id uuid, o_created boolean)
 LANGUAGE plpgsql AS $$
 DECLARE
     g       record;
-    v_pub   uuid;
     v_tpl   record;
     v_start date;
     v_end   date;
@@ -43,10 +42,6 @@ DECLARE
     v_issue uuid;
 BEGIN
     FOR g IN SELECT * FROM family_group ORDER BY created_at, id LOOP
-        SELECT p.id INTO v_pub FROM publication p
-         WHERE p.group_id = g.id ORDER BY p.created_at, p.id LIMIT 1;
-        CONTINUE WHEN v_pub IS NULL;
-
         v_start := date_trunc('month', p_now AT TIME ZONE g.timezone)::date;
         v_end   := (v_start + interval '1 month - 1 day')::date;
         v_close := ((v_start + interval '1 month')::date + (g.close_day - 1))::timestamp
@@ -55,41 +50,29 @@ BEGIN
         -- 템플릿: 직전 호가 쓴 템플릿의 최신 버전, 없으면 가장 최근 템플릿
         SELECT t.* INTO v_tpl FROM template t
          WHERE t.name = (SELECT t2.name FROM issue i JOIN template t2 ON t2.id = i.template_id
-                          WHERE i.publication_id = v_pub ORDER BY i.period_start DESC LIMIT 1)
+                          WHERE i.group_id = g.id ORDER BY i.period_start DESC LIMIT 1)
          ORDER BY t.version DESC LIMIT 1;
         IF v_tpl.id IS NULL THEN
             SELECT t.* INTO v_tpl FROM template t ORDER BY t.created_at DESC, t.version DESC LIMIT 1;
         END IF;
         CONTINUE WHEN v_tpl.id IS NULL;
 
-        INSERT INTO issue (publication_id, title, period_start, period_end, close_at, template_id,
+        INSERT INTO issue (group_id, title, period_start, period_end, close_at, template_id,
                            min_photos, max_photos, min_pages, max_pages, page_multiple)
-        VALUES (v_pub,
+        VALUES (g.id,
                 format('%s년 %s월호', extract(year FROM v_start)::int, extract(month FROM v_start)::int),
                 v_start, v_end, v_close, v_tpl.id,
                 v_tpl.min_photos, v_tpl.max_photos, v_tpl.min_pages, v_tpl.max_pages, v_tpl.page_multiple)
-        ON CONFLICT (publication_id, period_start) DO NOTHING
+        ON CONFLICT (group_id, period_start) DO NOTHING
         RETURNING id INTO v_issue;
 
         o_group_id := g.id;
         o_created  := v_issue IS NOT NULL;
         IF v_issue IS NULL THEN
             SELECT i.id INTO v_issue FROM issue i
-             WHERE i.publication_id = v_pub AND i.period_start = v_start;
+             WHERE i.group_id = g.id AND i.period_start = v_start;
         END IF;
         o_issue_id := v_issue;
-
-        -- 수집 중인 호에는 그룹 구성원을 계속 반영 (중간에 가입한 가족 포함)
-        IF (SELECT i.status FROM issue i WHERE i.id = v_issue) = 'collecting' THEN
-            INSERT INTO issue_member (issue_id, user_id, role)
-            SELECT v_issue, fm.user_id,
-                   CASE WHEN fm.user_id = g.owner_id THEN 'owner'
-                        WHEN fm.role = 'admin'       THEN 'editor'
-                        WHEN fm.role = 'member'      THEN 'contributor'
-                        ELSE 'viewer' END
-              FROM family_member fm WHERE fm.group_id = g.id
-            ON CONFLICT (issue_id, user_id) DO NOTHING;
-        END IF;
 
         RETURN NEXT;
     END LOOP;
@@ -97,7 +80,7 @@ END $$;
 
 -- =========================================================
 -- 2. 마감 시각이 지난 호 처리 (최대 p_limit 건)
---    - 업로드한 사람은 submitted, 안 올린 사람은 skipped 로 확정
+--    - select_media 가 이 그룹의 기간 안 게시물 사진으로 호별 후보(issue_media)를 만들고 선별한다
 --    - select_media 실행 후 선별 사진이 min_photos 미만이면
 --        auto_skip_below_min=true  -> skipped (미발행)
 --        false                     -> closing 으로 진행
@@ -117,23 +100,13 @@ BEGIN
     FOR c IN
         SELECT i.id, i.min_photos, g.auto_skip_below_min
           FROM issue i
-          JOIN publication p ON p.id = i.publication_id
-          JOIN family_group g ON g.id = p.group_id
+          JOIN family_group g ON g.id = i.group_id
          WHERE i.status = 'collecting' AND i.close_at <= p_now AND i.close_attempts < 5
          ORDER BY i.close_at, i.id
          LIMIT p_limit
            FOR UPDATE OF i SKIP LOCKED
     LOOP
         BEGIN
-            UPDATE issue_member im
-               SET submit_status = 'submitted', submitted_at = COALESCE(im.submitted_at, p_now)
-             WHERE im.issue_id = c.id AND im.role <> 'viewer' AND im.submit_status <> 'submitted'
-               AND EXISTS (SELECT 1 FROM media m
-                            WHERE m.issue_id = im.issue_id AND m.uploader_id = im.user_id);
-            UPDATE issue_member
-               SET submit_status = 'skipped'
-             WHERE issue_id = c.id AND role <> 'viewer' AND submit_status = 'pending';
-
             SELECT * INTO r FROM select_media(c.id);
 
             o_issue_id := c.id;

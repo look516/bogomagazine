@@ -184,9 +184,9 @@ SELECT i.id AS issue_id, i.closed_at
          WHERE lr.issue_id = i.id AND lr.status = 'failed') < 3;
 
 -- =========================================================
--- 정합성 가드: 배치(placement)의 사진/텍스트는 그 페이지의 조판이 속한 호의 것이어야 한다
---   다른 호(다른 가족 그룹일 수도 있다)의 사진이 조판/인쇄에 섞이는 것을 막는다.
---   placement 는 호를 직접 갖지 않고 page -> layout_run 을 거치므로 외래키로 표현할 수 없다. (layout -> intake 방향의 읽기)
+-- 정합성 가드: 배치(placement)에는 이 호에서 선별된(issue_media) 사진과 이 호의 텍스트만 올 수 있다
+--   다른 호(다른 가족 그룹일 수도 있다)의 사진, 또는 이 호에서 선별되지 않은 사진이 조판/인쇄에 섞이는 것을 막는다.
+--   placement 는 호를 직접 갖지 않고 page -> layout_run 을 거치므로 외래키로 표현할 수 없다. (layout -> feed 방향의 읽기)
 -- =========================================================
 CREATE OR REPLACE FUNCTION guard_placement_same_issue() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -198,8 +198,9 @@ BEGIN
      WHERE pg.id = NEW.page_id;
 
     IF NEW.media_id IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM media WHERE id = NEW.media_id AND issue_id = v_issue) THEN
-        RAISE EXCEPTION 'placement: media % does not belong to the issue of page %', NEW.media_id, NEW.page_id
+            SELECT 1 FROM issue_media im
+             WHERE im.issue_id = v_issue AND im.media_id = NEW.media_id AND im.selection_status = 'selected') THEN
+        RAISE EXCEPTION 'placement: media % was not selected for the issue of page %', NEW.media_id, NEW.page_id
             USING ERRCODE = 'check_violation';
     END IF;
     IF NEW.text_block_id IS NOT NULL AND NOT EXISTS (

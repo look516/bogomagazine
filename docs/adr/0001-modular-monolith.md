@@ -14,7 +14,7 @@
 
 ## 결정
 
-**모듈러 모놀리스**: 하나의 코드베이스와 하나의 DB를 쓰되, 8개 모듈(identity, groups, templates, issues, intake, layout, review, printing)로 나누고 경계를 코드로 강제한다.
+**모듈러 모놀리스**: 하나의 코드베이스와 하나의 DB를 쓰되, 8개 모듈(identity, groups, templates, issues, feed, layout, review, printing)로 나누고 경계를 코드로 강제한다.
 무거운 작업은 **같은 코드베이스의 별도 워커 프로세스**로 돌린다.
 
 ## 이유

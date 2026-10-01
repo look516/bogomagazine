@@ -64,7 +64,7 @@ DB (selected media, template, pins)
 ```
 
 규칙
-- `media`는 **선별 단계(`select_media`)를 통과한 `selected`만** 넣는다. 알고리즘은 선별을 다시 하지 않는다.
+- `media`는 **선별 단계(`select_media`)를 통과한(`issue_media.selection_status = 'selected'`) 사진만** 넣는다. 알고리즘은 선별을 다시 하지 않는다.
 - 단위는 전부 **mm**, 좌표 원점은 페이지 왼쪽 위. 사진 `focal_point`/`saliency`는 원본 기준 **0~1 비율**.
 - `pins`는 사용자가 지정한 위치 고정. 알고리즘은 반드시 존중하고, 못 지키면 `warnings`에 사유를 남긴다.
 - `media` 배열은 `taken_at` 순으로 정렬해 넘긴다 (시간순 서사의 기본 순서). 정렬 기준이 바뀌면 결과가 바뀌므로 입력에 고정한다.
