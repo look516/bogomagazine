@@ -132,7 +132,7 @@ DB는 Flyway 마이그레이션(`db/migrations`)으로 관리한다: 테이블�
   마감 배치와는 행 잠금으로 직렬화되어, 선별이 끝난 뒤에 들어온 사진이 조용히 누락되지 않는다.
 - DB는 `close_at` 시각 자체를 강제하지 않는다. 배치가 호를 닫기 전까지는 받는다. 마감 시각을 엄격히
   적용하려면 앱이 `close_at`을 먼저 확인할 것.
-- **어느 호로 넣을지**: `upload_target_issue(groupId, 촬영/게시 시각)`이 정한다.
+- **어느 호로 넣을지**: `upload_target_issue(groupId, 촬영/게시 시각)`이 정한다 (함수는 [R__020_issues_lifecycle.sql](../db/migrations/R__020_issues_lifecycle.sql)에 있다).
   1순위는 그 시각(그룹 타임존)이 기간에 속하는 수집 중 호, 2순위는 가장 이른 수집 중 호.
   수집 중인 호가 없으면 `NULL` → 앱은 "마감되었습니다"를 보여준다. 관리자가 늦은 사진을 받아야 하면
   `change_issue_status(호, 'collecting', 사용자, 사유, 새_close_at)`으로 재오픈한다.

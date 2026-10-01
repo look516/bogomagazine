@@ -57,6 +57,46 @@ DO $$ BEGIN
 END $$;
 ROLLBACK;
 
+\echo T04b 조판 결과(배치)까지 있는 호도 삭제된다 (media 와 placement 가 같은 문장에서 함께 지워짐)
+BEGIN;
+DO $$
+DECLARE v constant uuid := '00000000-0000-0000-0000-0000000000c1'; v_run uuid; v_pg uuid; v_tb uuid;
+BEGIN
+  INSERT INTO layout_run (issue_id, template_id, algorithm_version, seed, input_snapshot_hash, status)
+  VALUES (v, '00000000-0000-0000-0000-0000000000a1', '0.1.0', 1, 'h', 'done') RETURNING id INTO v_run;
+  INSERT INTO page (run_id, page_no) VALUES (v_run, 1) RETURNING id INTO v_pg;
+  INSERT INTO text_block (issue_id, kind, body) VALUES (v, 'caption', '캡션') RETURNING id INTO v_tb;
+  INSERT INTO placement (page_id, ref_type, media_id, x, y, w, h)
+  SELECT v_pg, 'media', id, 0, 0, 10, 10 FROM media WHERE issue_id = v LIMIT 3;
+  INSERT INTO placement (page_id, ref_type, text_block_id, x, y, w, h) VALUES (v_pg, 'text_block', v_tb, 0, 20, 10, 5);
+  ASSERT (SELECT count(*) FROM placement) = 4, 'T04b precondition';
+
+  DELETE FROM issue WHERE id = v;
+  SET CONSTRAINTS ALL IMMEDIATE;     -- 지연된 외래키 검사를 지금 실행해서, 위반이 남아 있으면 여기서 실패하게 한다
+  ASSERT (SELECT count(*) FROM media) = 0 AND (SELECT count(*) FROM placement) = 0
+     AND (SELECT count(*) FROM text_block) = 0, 'T04b 하위 데이터가 남음';
+END $$;
+ROLLBACK;
+
+\echo T04c 배치된 사진만 따로 삭제하는 것은 여전히 막힌다
+BEGIN;
+DO $$
+DECLARE v constant uuid := '00000000-0000-0000-0000-0000000000c1'; v_run uuid; v_pg uuid;
+BEGIN
+  INSERT INTO layout_run (issue_id, template_id, algorithm_version, seed, input_snapshot_hash, status)
+  VALUES (v, '00000000-0000-0000-0000-0000000000a1', '0.1.0', 1, 'h', 'done') RETURNING id INTO v_run;
+  INSERT INTO page (run_id, page_no) VALUES (v_run, 1) RETURNING id INTO v_pg;
+  INSERT INTO placement (page_id, ref_type, media_id, x, y, w, h)
+  SELECT v_pg, 'media', id, 0, 0, 10, 10 FROM media WHERE issue_id = v LIMIT 1;
+  SET CONSTRAINTS ALL IMMEDIATE;
+  BEGIN
+    DELETE FROM media WHERE id IN (SELECT media_id FROM placement);
+    RAISE EXCEPTION 'T04c failed: 배치된 사진이 삭제됨';
+  EXCEPTION WHEN foreign_key_violation THEN NULL;
+  END;
+END $$;
+ROLLBACK;
+
 \echo T20 전이: 허용/불허/이력/closed_at
 BEGIN;
 DO $$

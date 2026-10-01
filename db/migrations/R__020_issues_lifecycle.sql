@@ -277,3 +277,24 @@ CROSS JOIN LATERAL (
         WHEN 'archived' THEN 'archived'
     END AS current_step
 ) step;
+
+-- =========================================================
+-- 5. 업로드 라우팅 (issues 소속: 그룹의 수집 중인 호를 고르는 함수): 그룹의 사진이 어느 호로 들어가야 하는가
+--    마감 유예(close_day > 1) 동안은 호 두 개가 동시에 collecting 일 수 있다.
+--      1순위: 촬영/게시 시각(그룹 타임존)이 기간에 속하는 collecting 호
+--      2순위: 가장 이른 collecting 호 (전달이 닫혔으면 이번 달로 넘어감)
+--    수집 중인 호가 없으면 NULL -> 앱은 사용자에게 "마감되었습니다"를 보여주고,
+--    관리자가 필요하면 change_issue_status(호, 'collecting', ..., 새 close_at)로 재오픈한다.
+-- =========================================================
+CREATE OR REPLACE FUNCTION upload_target_issue(p_group uuid, p_ts timestamptz DEFAULT now())
+RETURNS uuid
+LANGUAGE sql STABLE AS $$
+    SELECT i.id
+      FROM issue i
+      JOIN publication p ON p.id = i.publication_id
+      JOIN family_group g ON g.id = p.group_id
+     WHERE g.id = p_group AND i.status = 'collecting'
+     ORDER BY ((p_ts AT TIME ZONE g.timezone)::date BETWEEN i.period_start AND i.period_end) DESC,
+              i.period_start
+     LIMIT 1
+$$;

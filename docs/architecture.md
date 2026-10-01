@@ -41,7 +41,7 @@
 | **identity** | `app_user`, `auth_identity` | 사용자, 카카오/애플 로그인 연결, 회원 탈퇴 익명화 | `V001`, `R__070_identity_privacy` |
 | **groups** | `family_group`, `family_member`, `publication` | 가족 그룹, 구성원, 월간지 | `V001` |
 | **templates** | `template`, `page_master`, `style`, `font` | 불변 버전의 판형/슬롯/스타일/폰트 | `V001` |
-| **issues** | `issue`, `issue_member`, `issue_status_history`, `issue_status_transition` | 호의 상태 전이, 월 마감 배치, 진행상태 조회 | `R__020_issues_lifecycle`, `R__050_issues_batch` |
+| **issues** | `issue`, `issue_member`, `issue_status_history`, `issue_status_transition` | 호의 상태 전이, 월 마감 배치, 진행상태 조회, 업로드할 호 고르기(`upload_target_issue`) | `R__020_issues_lifecycle`, `R__050_issues_batch` |
 | **intake** | `social_account`, `source_post`, `media`, `media_rendition`, `text_block` | 사진/게시물 수집, 업로드 가드, 선별 | `R__010_intake_selection`, `R__030_intake_guards` |
 | **layout** | `layout_run`, `page`, `placement`, `preview` | 자동 조판 결과, 워커 임대 계약, 조판 큐 | `R__060_layout_worker` |
 | **review** | `approval`, `override`, `comment`, `page_lock` | 승인(버전 기록), 사람의 수정, 코멘트, 락 | `R__040_review_guards` |
@@ -74,6 +74,17 @@
 | `identity.anonymize_user()` | groups, issues, intake, review의 행을 삭제/수정 | 탈퇴는 본질적으로 여러 모듈을 가로지르는 작업. |
 
 이 예외가 늘어나면 모듈 경계가 무너지고 있다는 신호다. 새 결합을 추가하는 PR은 이 표를 함께 고친다.
+
+### 함수 수준까지 보면 "계층"이 아니다 (분석으로 확인)
+
+외래키만 보면 위 그림처럼 순환 없는 계층이다. 그러나 함수/뷰 본문까지 파싱해 보면(`scripts/analysis/fn-deps.py`, 함수 19개·뷰 2개)
+**`issues`는 `layout`/`review`/`intake`/`printing`과 양방향 결합**이 있다. 외래키는 그쪽이 `issues`를 가리키고, 함수는 `issues`가 그쪽을 읽는다.
+`identity.anonymize_user()`도 groups/issues/intake/review를 건드린다. 위 표가 그 목록이며, 분석 결과와 일치함을 확인했다.
+
+- 의미: **`issues`는 독립적으로 바꾸거나 떼어낼 수 없다.** `layout_run`/`approval`/`override`/`print_job`/`placement`/`media`의 컬럼을 바꾸면
+  `change_issue_status()`와 `v_issue_progress`가 영향을 받는다.
+- DB가 지켜 주는 것과 아닌 것: **뷰**(`v_issue_progress`)가 쓰는 컬럼은 PostgreSQL이 추적해서 지우려 하면 막는다.
+  **plpgsql 함수 본문**은 추적하지 않아서, 컬럼 이름을 바꿔도 마이그레이션은 성공하고 **테스트에서만** 실패한다(재현 확인). 그래서 모든 함수가 테스트에서 호출되는 것이 중요하다 (현재 19개 모두 호출됨, 분기 단위 커버리지는 미측정).
 
 ## 프로세스 구성
 

@@ -1,8 +1,8 @@
--- [intake 모듈] 업로드 가드(수집 중인 호에만 업로드) + 업로드 라우팅
+-- [intake 모듈] 업로드 가드(수집 중인 호에만 업로드)
 -- Flyway 반복 마이그레이션: 내용이 바뀌면 다음 migrate 때 자동 재적용된다. 파일명 번호 순서로 적용된다.
 -- 소유 테이블/의존 방향은 docs/architecture.md 와 db/tests/architecture.sql 참고.
 
--- 데이터 무결성 가드 (트리거) + 업로드 라우팅
+-- 데이터 무결성 가드 (트리거): 수집 중인 호에만 업로드
 
 -- =========================================================
 -- 1. 업로드 가드: 수집 중(collecting)인 호에만 사진/게시물을 넣을 수 있다.
@@ -33,24 +33,3 @@ CREATE TRIGGER trg_media_collecting BEFORE INSERT ON media
 DROP TRIGGER IF EXISTS trg_source_post_collecting ON source_post;
 CREATE TRIGGER trg_source_post_collecting BEFORE INSERT ON source_post
     FOR EACH ROW EXECUTE FUNCTION guard_issue_collecting();
-
--- =========================================================
--- 2. 업로드 라우팅: 그룹의 사진이 어느 호로 들어가야 하는가
---    마감 유예(close_day > 1) 동안은 호 두 개가 동시에 collecting 일 수 있다.
---      1순위: 촬영/게시 시각(그룹 타임존)이 기간에 속하는 collecting 호
---      2순위: 가장 이른 collecting 호 (전달이 닫혔으면 이번 달로 넘어감)
---    수집 중인 호가 없으면 NULL -> 앱은 사용자에게 "마감되었습니다"를 보여주고,
---    관리자가 필요하면 change_issue_status(호, 'collecting', ..., 새 close_at)로 재오픈한다.
--- =========================================================
-CREATE OR REPLACE FUNCTION upload_target_issue(p_group uuid, p_ts timestamptz DEFAULT now())
-RETURNS uuid
-LANGUAGE sql STABLE AS $$
-    SELECT i.id
-      FROM issue i
-      JOIN publication p ON p.id = i.publication_id
-      JOIN family_group g ON g.id = p.group_id
-     WHERE g.id = p_group AND i.status = 'collecting'
-     ORDER BY ((p_ts AT TIME ZONE g.timezone)::date BETWEEN i.period_start AND i.period_end) DESC,
-              i.period_start
-     LIMIT 1
-$$;

@@ -45,6 +45,7 @@ check "허용 전이 한 줄 삭제"       "DELETE FROM issue_status_transition 
 check "금지된 모듈 간 외래키"      "ALTER TABLE template ADD COLUMN bad uuid REFERENCES issue(id)"            db/tests/architecture.sql "허용되지 않은 모듈 간 외래키"
 check "코멘트 없는 새 테이블"      "CREATE TABLE zz_new (id int)"                                             db/tests/architecture.sql "소유 모듈 코멘트가 없거나"
 check "사용자 조회 인덱스 제거"    "DROP INDEX ix_family_member_user"                                         db/tests/health.sql       "T64"
+check "배치 외래키를 다시 즉시 검사로"  "ALTER TABLE placement DROP CONSTRAINT placement_media_id_fkey, ADD CONSTRAINT placement_media_id_fkey FOREIGN KEY (media_id) REFERENCES media(id)" db/tests/issues.sql "foreign key constraint"
 check "죽은 워커 정리 무력화"      "CREATE OR REPLACE FUNCTION reap_stale_compose_jobs(p_now timestamptz DEFAULT now(), p_timeout interval DEFAULT interval '5 minutes') RETURNS int LANGUAGE sql AS 'SELECT 0'" db/tests/layout.sql "T71"
 
 echo "----"

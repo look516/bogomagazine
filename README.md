@@ -28,7 +28,8 @@
 │  ├─ algorithm-io.md    자동 조판 알고리즘 입출력 계약
 │  └─ adr/               결정 기록 (모듈러 모놀리스, DB 마이그레이션)
 ├─ scripts/              db.sh(개발/테스트/ERD/성능), check-migrations.sh, secret-scan.sh, check.sh, setup.sh,
-│                        verify-guards.sh(변이 검사), repro/(재현 스크립트), erd-render-check.html
+│                        verify-guards.sh(변이 검사), repro/(재현 스크립트), analysis/(함수 수준 의존 분석),
+│                        erd-render-check.html
 ├─ .githooks/            pre-commit
 ├─ .github/              CI 워크플로, PR 템플릿
 ├─ docker-compose.yml    로컬/CI 공용 PostgreSQL + Flyway
