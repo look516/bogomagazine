@@ -1,0 +1,8 @@
+# 줄바꿈을 LF 로 고정한다. Windows(core.autocrlf=true)에서 CRLF 로 바뀌면
+# Flyway 마이그레이션 체크섬이 Linux CI 와 달라져 검증이 실패한다.
+* text=auto eol=lf
+*.sql text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+.githooks/* text eol=lf

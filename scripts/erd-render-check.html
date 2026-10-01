@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>erd render check</title>
+<style>body{font-family:sans-serif;margin:16px} .ok{color:#0a7d2c} .bad{color:#c0392b;font-weight:bold} pre{background:#f4f4f4;padding:8px;overflow:auto} h3{margin:24px 0 4px} svg{max-width:100%;height:auto}</style>
+</head><body>
+<!--
+  docs/erd.md 의 Mermaid 다이어그램이 실제 Mermaid 엔진으로 렌더링되는지 확인한다 (GitHub 에서 그림이 깨지는 사고 방지).
+  사용법 (저장소 루트에서):
+      python3 -m http.server 8765 --bind 127.0.0.1
+      브라우저에서 http://127.0.0.1:8765/scripts/erd-render-check.html 열기 -> 맨 위에 "RESULT 10/10 OK" 가 나와야 한다
+  Mermaid 라이브러리를 CDN(cdn.jsdelivr.net)에서 받으므로 인터넷이 필요하다.
+-->
+<h2>Mermaid 렌더링 검증 (docs/erd.md)</h2>
+<div id="summary">검증 중...</div>
+<div id="out"></div>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose", er: { useMaxWidth: true } });
+window.__results = [];
+const md = await (await fetch("/docs/erd.md")).text();
+const blocks = [...md.matchAll(/```mermaid\n([\s\S]*?)```/g)].map(m => m[1]);
+const out = document.getElementById("out");
+let i = 0;
+for (const code of blocks) {
+  i++;
+  const kind = code.trim().split("\n")[0];
+  const entry = { n: i, kind, chars: code.length, ok: false, error: null };
+  const h = document.createElement("h3"); h.textContent = `#${i} ${kind} (${code.length} chars)`; out.appendChild(h);
+  try {
+    await mermaid.parse(code);
+    const { svg } = await mermaid.render("g" + i, code);
+    const div = document.createElement("div"); div.innerHTML = svg; out.appendChild(div);
+    entry.ok = true; h.className = "ok";
+  } catch (e) {
+    entry.error = String(e && e.message ? e.message : e).slice(0, 400);
+    h.className = "bad";
+    const pre = document.createElement("pre"); pre.textContent = entry.error; out.appendChild(pre);
+  }
+  window.__results.push(entry);
+}
+const okN = window.__results.filter(r => r.ok).length;
+document.getElementById("summary").textContent = `RESULT ${okN}/${blocks.length} OK`;
+window.__done = true;
+</script></body></html>

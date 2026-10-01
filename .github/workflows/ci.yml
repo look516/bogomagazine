@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # 기준 브랜치와 비교하려면 전체 이력이 필요
+
+      # 이미 합쳐진 V 마이그레이션을 고치거나, 번호/이름 규칙을 어기면 실패
+      - name: Migration rules (PR only)
+        if: github.event_name == 'pull_request'
+        run: bash scripts/check-migrations.sh "origin/${{ github.base_ref }}"
+
+      # 빈 DB -> Flyway 전체 적용 -> 체크섬 검증 -> 시드 -> 모듈별 테스트 + 아키텍처 테스트
+      # 로컬의 `./scripts/db.sh test` 와 완전히 같은 명령이다.
+      - name: DB tests
+        run: bash scripts/db.sh test
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # 전체 이력을 검사해야 과거 커밋에 남은 비밀도 잡는다
+
+      # 훅은 --no-verify 로 우회할 수 있으므로, 같은 검사를 CI 에서 다시 한다 (CI 에서는 Docker 가 없으면 실패)
+      - name: Secret scan (full history)
+        run: bash scripts/secret-scan.sh --history

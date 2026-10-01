@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# 설치: ./scripts/setup.sh (core.hooksPath 를 .githooks 로 지정). 우회(--no-verify)는 CI 가 다시 막는다.
+exec bash "$(git rev-parse --show-toplevel)/scripts/check.sh"
