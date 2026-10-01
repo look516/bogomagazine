@@ -298,3 +298,25 @@ LANGUAGE sql STABLE AS $$
               i.period_start
      LIMIT 1
 $$;
+
+-- =========================================================
+-- 6. 정합성 가드: 호 참여자는 그 호가 속한 가족 그룹의 구성원이어야 한다
+--    (그룹 밖의 사람이 호에 들어오면 그 호의 사진/조판/승인에 접근할 수 있게 되는 권한 구멍을 막는다)
+-- =========================================================
+CREATE OR REPLACE FUNCTION guard_issue_member_in_group() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1
+                     FROM issue i
+                     JOIN publication p ON p.id = i.publication_id
+                     JOIN family_member fm ON fm.group_id = p.group_id
+                    WHERE i.id = NEW.issue_id AND fm.user_id = NEW.user_id) THEN
+        RAISE EXCEPTION 'issue_member: user % is not a member of the family group of issue %', NEW.user_id, NEW.issue_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_issue_member_group ON issue_member;
+CREATE TRIGGER trg_issue_member_group BEFORE INSERT OR UPDATE OF issue_id, user_id ON issue_member
+    FOR EACH ROW EXECUTE FUNCTION guard_issue_member_in_group();

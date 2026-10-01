@@ -49,6 +49,21 @@ check "사용자 조회 인덱스 제거"    "DROP INDEX ix_family_member_user" 
 check "배치 외래키를 다시 즉시 검사로"  "ALTER TABLE placement DROP CONSTRAINT placement_media_id_fkey, ADD CONSTRAINT placement_media_id_fkey FOREIGN KEY (media_id) REFERENCES media(id)" db/tests/issues.sql "foreign key constraint"
 check "죽은 워커 정리 무력화"      "CREATE OR REPLACE FUNCTION reap_stale_compose_jobs(p_now timestamptz DEFAULT now(), p_timeout interval DEFAULT interval '5 minutes') RETURNS int LANGUAGE sql AS 'SELECT 0'" db/tests/layout.sql "T71"
 
+# --- 참조 정합성(db/tests/integrity.sql): 복합 외래키와 트리거를 하나씩 약화/제거 ---
+check "사진-게시물 복합 FK 제거"      "ALTER TABLE media DROP CONSTRAINT media_source_post_id_issue_id_fkey, ADD FOREIGN KEY (source_post_id) REFERENCES source_post(id) ON DELETE SET NULL" db/tests/integrity.sql "T100 failed"
+check "텍스트-게시물 복합 FK 제거"    "ALTER TABLE text_block DROP CONSTRAINT text_block_source_post_id_issue_id_fkey, ADD FOREIGN KEY (source_post_id) REFERENCES source_post(id) ON DELETE SET NULL" db/tests/integrity.sql "T101 failed"
+check "승인-페이지 복합 FK 제거"      "ALTER TABLE approval DROP CONSTRAINT approval_page_id_run_id_fkey"        db/tests/integrity.sql "T102 failed"
+check "수정로그-조판 복합 FK 제거"    "ALTER TABLE override DROP CONSTRAINT override_run_id_issue_id_fkey"       db/tests/integrity.sql "T103 failed"
+check "인쇄작업-조판 복합 FK 제거"    "ALTER TABLE print_job DROP CONSTRAINT print_job_run_id_issue_id_fkey"     db/tests/integrity.sql "T104 failed"
+check "배치 교차 참조 가드 제거"      "DROP TRIGGER trg_placement_same_issue ON placement"                       db/tests/integrity.sql "T105 failed"
+check "코멘트-페이지 가드 제거"       "DROP TRIGGER trg_comment_page_issue ON comment"                           db/tests/integrity.sql "T106 failed"
+check "게시물-계정 플랫폼 FK 제거"    "ALTER TABLE source_post DROP CONSTRAINT source_post_account_id_platform_fkey" db/tests/integrity.sql "T107 failed"
+check "게시물-계정 주인 FK 제거"      "ALTER TABLE source_post DROP CONSTRAINT source_post_account_id_contributor_id_fkey" db/tests/integrity.sql "T107 failed"
+check "미리보기-페이지 FK 제거"       "ALTER TABLE preview DROP CONSTRAINT preview_run_id_page_no_fkey"          db/tests/integrity.sql "T108 failed"
+check "호 참여자 그룹 확인 제거"      "DROP TRIGGER trg_issue_member_group ON issue_member"                      db/tests/integrity.sql "T109 failed"
+check "업로더 참여자 확인 제거"       "DROP TRIGGER trg_media_uploader ON media"                                 db/tests/integrity.sql "T110 failed"
+check "게시물 등록자 확인 제거"       "DROP TRIGGER trg_source_post_contributor ON source_post"                  db/tests/integrity.sql "T111 failed"
+
 echo "----"
 if [ "$bad" -eq 0 ]; then echo "모든 변이를 테스트가 잡았다"; else echo "놓친 변이가 있다 (위 FAIL 항목)"; fi
 exit "$bad"

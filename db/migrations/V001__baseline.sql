@@ -1,5 +1,10 @@
--- V001 baseline: 초기 스키마. 이 파일은 배포된 뒤에는 절대 수정하지 않는다 (체크섬이 깨짐).
--- 스키마를 바꾸려면 새 V0xx__설명.sql 을 추가한다. 함수/뷰/트리거는 R__*.sql 에서 관리한다.
+-- V001 baseline: 초기 스키마 전체. 아직 어디에도 배포되지 않았으므로 설계가 바뀌면 이 파일에 직접 반영한다.
+-- main 에 합쳐지고 어떤 DB 에 적용된 뒤에는 수정하지 않는다 (체크섬이 깨짐). 그때부터는 새 V0xx__설명.sql 을 추가한다.
+-- 함수/뷰/트리거는 R__*.sql 에서 관리한다.
+--
+-- 무결성 원칙: 같은 사실이 두 곳에 있으면(예: 사진의 호 = 원본 게시물의 호) 복합 외래키로 서로 어긋나지 못하게 한다.
+--   복합 외래키는 컬럼 중 하나가 NULL 이면 검사를 건너뛴다 (게시물 없이 올린 사진, 호 전체 승인 등이 이에 해당).
+--   외래키로 표현할 수 없는 것(배치 <-> 호, 코멘트 <-> 호, 호 참여자 <-> 그룹, 업로더 <-> 호 참여자)은 R__*.sql 의 트리거가 지킨다.
 
 -- 자동 조판 출판 서비스 DB 스키마 (PostgreSQL)
 -- 흐름: 수집 -> 선별 -> 자동 조판 -> 사람 수정 -> 미리보기 -> 인쇄
@@ -114,7 +119,7 @@ CREATE TABLE issue (
     title           text NOT NULL,
     period_start    date NOT NULL,
     period_end      date NOT NULL,
-    -- 상태 흐름은 progress.sql 의 issue_status_transition 참고
+    -- 상태 흐름은 아래 issue_status_transition 과 R__020_issues_lifecycle.sql 참고
     --   collecting(수집) -> closing(마감 처리: 선별+조판) -> review(검토) -> approved(승인)
     --   -> printing(인쇄 제작) -> printed(인쇄 완료/배송) -> archived
     --   수집량 미달 시 collecting -> skipped(이번 달 미발행) -> archived
@@ -164,6 +169,14 @@ CREATE TABLE issue_status_history (
 );
 CREATE INDEX ix_issue_status_history ON issue_status_history (issue_id, changed_at);
 
+-- 허용된 상태 전이 표 (행 데이터는 R__020_issues_lifecycle.sql 이 관리한다)
+CREATE TABLE issue_status_transition (
+    from_status  text NOT NULL,
+    to_status    text NOT NULL,
+    note         text,
+    PRIMARY KEY (from_status, to_status)
+);
+
 -- =========================================================
 -- 3. 입력 수집 (SNS 게시물 / 사진)
 -- =========================================================
@@ -175,14 +188,17 @@ CREATE TABLE social_account (
     token_ref      text,                -- 시크릿 스토어 참조 (토큰 원문 저장 금지)
     consent_at     timestamptz,
     consent_scope  jsonb,               -- 사용/인쇄/공개 동의 범위
-    UNIQUE (platform, external_id)
+    UNIQUE (platform, external_id),
+    -- 복합 외래키의 대상: source_post 가 계정의 플랫폼/주인과 어긋나지 않게 한다
+    UNIQUE (id, platform),
+    UNIQUE (id, user_id)
 );
 
 CREATE TABLE source_post (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     issue_id          uuid NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
     contributor_id    uuid NOT NULL REFERENCES app_user(id),
-    account_id        uuid REFERENCES social_account(id),
+    account_id        uuid,
     platform          text NOT NULL,
     external_post_id  text,
     posted_at         timestamptz NOT NULL,
@@ -192,14 +208,19 @@ CREATE TABLE source_post (
     engagement        jsonb,            -- 좋아요/댓글 수 등 (중요도 점수 입력)
     raw               jsonb,            -- 원본 payload 스냅샷
     created_at        timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (issue_id, platform, external_post_id)
+    UNIQUE (issue_id, platform, external_post_id),
+    -- 복합 외래키(media/text_block 이 "같은 호의 게시물"만 참조)의 대상
+    UNIQUE (id, issue_id),
+    -- 계정이 있으면 그 계정의 플랫폼/주인과 일치해야 한다 (계정 없이 직접 올린 게시물은 account_id 가 NULL)
+    FOREIGN KEY (account_id, platform)       REFERENCES social_account (id, platform),
+    FOREIGN KEY (account_id, contributor_id) REFERENCES social_account (id, user_id)
 );
 CREATE INDEX ix_source_post_issue_time ON source_post (issue_id, posted_at);
 
 CREATE TABLE media (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     issue_id          uuid NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
-    source_post_id    uuid REFERENCES source_post(id) ON DELETE SET NULL,
+    source_post_id    uuid,
     uploader_id       uuid NOT NULL REFERENCES app_user(id),
     kind              text NOT NULL DEFAULT 'photo' CHECK (kind IN ('photo','video_thumb')),
     storage_key       text NOT NULL,
@@ -222,7 +243,9 @@ CREATE TABLE media (
     -- 권리/동의
     rights_ok         boolean NOT NULL DEFAULT false,
     created_at        timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (issue_id, sha256)
+    UNIQUE (issue_id, sha256),
+    -- 원본 게시물이 있으면 같은 호의 게시물이어야 한다. 게시물이 지워져도 사진은 남으므로 source_post_id 만 NULL 로 만든다
+    FOREIGN KEY (source_post_id, issue_id) REFERENCES source_post (id, issue_id) ON DELETE SET NULL (source_post_id)
 );
 CREATE INDEX ix_media_issue_sel ON media (issue_id, selection_status);
 CREATE INDEX ix_media_phash     ON media (phash);
@@ -240,12 +263,13 @@ CREATE TABLE media_rendition (
 CREATE TABLE text_block (
     id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     issue_id         uuid NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
-    source_post_id   uuid REFERENCES source_post(id) ON DELETE SET NULL,
+    source_post_id   uuid,
     kind             text NOT NULL CHECK (kind IN ('title','caption','quote','body')),
     body             text NOT NULL,
     runs             jsonb,             -- 인라인 서식 span 배열
     created_by       uuid REFERENCES app_user(id),
-    created_at       timestamptz NOT NULL DEFAULT now()
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (source_post_id, issue_id) REFERENCES source_post (id, issue_id) ON DELETE SET NULL (source_post_id)
 );
 
 -- =========================================================
@@ -255,7 +279,7 @@ CREATE TABLE layout_run (
     id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     -- "최신"은 created_at 이 아니라 seq 로 판정한다 (같은 트랜잭션에서 만든 행은 created_at 이 같다)
     seq                  bigint GENERATED ALWAYS AS IDENTITY,
-    -- 호별 조판 회차 (1부터). guards.sql 의 트리거가 자동 부여한다.
+    -- 호별 조판 회차 (1부터). R__060_layout_worker.sql 의 트리거가 자동 부여한다.
     run_no               int NOT NULL,
     issue_id             uuid NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
     template_id          uuid NOT NULL REFERENCES template(id),
@@ -271,14 +295,16 @@ CREATE TABLE layout_run (
     log                  text,
     started_at           timestamptz,
     finished_at          timestamptz,
-    -- 워커 임대(lease): worker.sql 의 claim/heartbeat/complete/fail/reap 함수가 관리
+    -- 워커 임대(lease): R__060_layout_worker.sql 의 claim/heartbeat/complete/fail/reap 함수가 관리
     locked_by            text,
     locked_at            timestamptz,
     heartbeat_at         timestamptz,    -- running 인데 오래 갱신이 없으면 워커가 죽은 것으로 보고 failed 처리
     attempts             int NOT NULL DEFAULT 0,   -- 이 호의 몇 번째 시도인지 (실패 횟수 + 1)
     input_ref            text,           -- 조판 입력 JSON 의 저장 위치 (재현용)
     created_at           timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (issue_id, run_no)
+    UNIQUE (issue_id, run_no),
+    -- 복합 외래키(승인/수정/인쇄작업의 호와 조판의 호가 같음을 보장)의 대상
+    UNIQUE (id, issue_id)
 );
 CREATE INDEX ix_layout_run_issue ON layout_run (issue_id, seq DESC);
 CREATE INDEX ix_layout_run_running ON layout_run (heartbeat_at) WHERE status = 'running';
@@ -288,7 +314,8 @@ CREATE TABLE page (
     run_id     uuid NOT NULL REFERENCES layout_run(id) ON DELETE CASCADE,
     page_no    int  NOT NULL,
     master_id  uuid REFERENCES page_master(id),
-    UNIQUE (run_id, page_no)
+    UNIQUE (run_id, page_no),
+    UNIQUE (id, run_id)       -- 복합 외래키(승인의 페이지와 조판이 같음을 보장)의 대상
 );
 
 CREATE TABLE placement (
@@ -296,8 +323,11 @@ CREATE TABLE placement (
     page_id   uuid NOT NULL REFERENCES page(id) ON DELETE CASCADE,
     slot_id   text,
     ref_type  text NOT NULL CHECK (ref_type IN ('media','text_block')),
-    media_id       uuid REFERENCES media(id),
-    text_block_id  uuid REFERENCES text_block(id),
+    -- 커밋 시점에 검사(DEFERRABLE INITIALLY DEFERRED): 호를 삭제하면 사진/텍스트(호에서 CASCADE)와 배치(조판 -> 페이지 -> 배치로
+    -- CASCADE)가 같은 문장에서 함께 지워지는데, 즉시 검사하면 사진이 먼저 지워지는 순간 배치가 남아 있어 호 삭제가 실패한다.
+    -- 배치된 사진만 따로 지우는 것은 여전히 막힌다. 같은 호의 사진/텍스트인지는 R__060_layout_worker.sql 의 트리거가 지킨다.
+    media_id       uuid REFERENCES media(id) DEFERRABLE INITIALLY DEFERRED,
+    text_block_id  uuid REFERENCES text_block(id) DEFERRABLE INITIALLY DEFERRED,
     -- 단위: mm
     x numeric(8,2) NOT NULL,
     y numeric(8,2) NOT NULL,
@@ -320,13 +350,15 @@ CREATE INDEX ix_placement_media ON placement (media_id);
 CREATE TABLE override (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     issue_id     uuid NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
-    run_id       uuid NOT NULL REFERENCES layout_run(id) ON DELETE CASCADE,
+    run_id       uuid NOT NULL,
     seq          bigint GENERATED ALWAYS AS IDENTITY,   -- 변경 순서
     target_type  text NOT NULL CHECK (target_type IN ('page','placement','media')),
     target_id    uuid NOT NULL,
     op           jsonb NOT NULL,   -- move/resize/swap/crop/pin/exclude ...
     author_id    uuid NOT NULL REFERENCES app_user(id),
-    created_at   timestamptz NOT NULL DEFAULT now()
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    -- 수정이 가리키는 조판이 이 호의 조판이어야 한다
+    FOREIGN KEY (run_id, issue_id) REFERENCES layout_run (id, issue_id) ON DELETE CASCADE
 );
 CREATE INDEX ix_override_run_seq ON override (run_id, seq);
 
@@ -340,15 +372,20 @@ CREATE TABLE approval (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     seq         bigint GENERATED ALWAYS AS IDENTITY,   -- 최신 판정 기준 (created_at 아님)
     issue_id    uuid NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
-    page_id     uuid REFERENCES page(id) ON DELETE CASCADE,   -- NULL 이면 호 전체
-    -- 어느 버전을 승인했는지. guards.sql 의 트리거가 비워 두면 자동으로 채운다.
+    page_id     uuid,                          -- NULL 이면 호 전체
+    -- 어느 버전을 승인했는지. R__040_review_guards.sql 의 트리거가 비워 두면 자동으로 채운다.
     -- 이후에 이 run 에서 seq 가 더 큰 override 가 이 페이지에 생기면 승인은 무효(stale)로 본다.
-    run_id        uuid REFERENCES layout_run(id) ON DELETE CASCADE,
+    run_id        uuid,
     override_seq  bigint,
     user_id     uuid NOT NULL REFERENCES app_user(id),
     status      text NOT NULL CHECK (status IN ('approved','changes_requested')),
     comment     text,
-    created_at  timestamptz NOT NULL DEFAULT now()
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    -- 페이지를 승인하면 그 페이지의 조판(run_id)도 반드시 같이 기록된다 (복합 외래키는 NULL 이 있으면 검사를 건너뛰므로 따로 막는다)
+    CHECK (page_id IS NULL OR run_id IS NOT NULL),
+    -- 승인의 호 / 조판 / 페이지가 서로 어긋나지 않게 한다
+    FOREIGN KEY (run_id, issue_id) REFERENCES layout_run (id, issue_id) ON DELETE CASCADE,
+    FOREIGN KEY (page_id, run_id)  REFERENCES page (id, run_id) ON DELETE CASCADE
 );
 
 CREATE TABLE comment (
@@ -367,20 +404,22 @@ CREATE TABLE comment (
 -- =========================================================
 CREATE TABLE preview (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    run_id        uuid NOT NULL REFERENCES layout_run(id) ON DELETE CASCADE,
+    run_id        uuid NOT NULL,
     override_seq  bigint NOT NULL DEFAULT 0,   -- 이 시점까지의 수정 반영
     page_no       int NOT NULL,
     storage_key   text,
     status        text NOT NULL DEFAULT 'queued'
         CHECK (status IN ('queued','done','failed')),
-    UNIQUE (run_id, override_seq, page_no)
+    UNIQUE (run_id, override_seq, page_no),
+    -- 존재하는 페이지의 미리보기만 둘 수 있다 (page 가 지워지면 함께 지워짐)
+    FOREIGN KEY (run_id, page_no) REFERENCES page (run_id, page_no) ON DELETE CASCADE
 );
 
 CREATE TABLE print_job (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     seq               bigint GENERATED ALWAYS AS IDENTITY,   -- 최신 판정 기준 (created_at 아님)
     issue_id          uuid NOT NULL REFERENCES issue(id),
-    run_id            uuid NOT NULL REFERENCES layout_run(id),
+    run_id            uuid NOT NULL,
     override_seq      bigint NOT NULL,        -- 확정본 고정
     pdf_key           text,
     pdf_profile       text NOT NULL DEFAULT 'PDF/X-1a',
@@ -390,7 +429,9 @@ CREATE TABLE print_job (
     preflight_report  jsonb,                  -- 해상도 부족, 폰트 누락, 안전영역 침범
     status            text NOT NULL DEFAULT 'queued'
         CHECK (status IN ('queued','rendering','preflight_failed','ready','failed')),
-    created_at        timestamptz NOT NULL DEFAULT now()
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    -- 인쇄할 조판이 이 호의 조판이어야 한다
+    FOREIGN KEY (run_id, issue_id) REFERENCES layout_run (id, issue_id)
 );
 
 CREATE TABLE print_order (
@@ -453,17 +494,7 @@ CREATE INDEX ix_source_post_contrib  ON source_post (contributor_id);
 CREATE INDEX ix_social_account_user  ON social_account (user_id);
 
 -- =========================================================
--- 9. 상태 전이 허용표 (테이블만 여기서 만든다. 행 데이터는 R__020_progress.sql 이 관리)
--- =========================================================
-CREATE TABLE issue_status_transition (
-    from_status  text NOT NULL,
-    to_status    text NOT NULL,
-    note         text,
-    PRIMARY KEY (from_status, to_status)
-);
-
--- =========================================================
--- 10. 테이블 소유 모듈 + 설명 (소유권의 단일 기준)
+-- 9. 테이블 소유 모듈 + 설명 (소유권의 단일 기준)
 --     형식: 'module:<모듈> | <설명>'. db/tests/architecture.sql 이 형식을 검사하고
 --     docs/erd.md 생성기(scripts/gen_erd.py)가 이 코멘트로 모듈별로 묶는다.
 -- =========================================================

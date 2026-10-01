@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # 마이그레이션 파일 규칙 검사. 사람이 실수하기 쉬운 부분을 기계가 막는다.
-#   ./scripts/check-migrations.sh --staged       커밋 직전(pre-commit)  : 스테이징된 변경을 HEAD 와 비교
+#   ./scripts/check-migrations.sh --staged       커밋 직전(pre-commit)  : 스테이징된 변경을 main 과 비교
 #   ./scripts/check-migrations.sh origin/main    PR/CI                 : 기준 브랜치와 비교
+# 보호 대상은 "기준 브랜치(기본 origin/main)에 이미 합쳐진" V 파일이다. 아직 main 에 없는 V 파일(이 브랜치에서 새로 만든 것)은
+# 어떤 DB 에도 적용되지 않았으므로 자유롭게 고칠 수 있다. 기준 브랜치가 없으면(첫 커밋 등) HEAD 를 기준으로 삼는다.
+# 기준 브랜치 이름이 다르면 MIGRATION_BASE_REF=origin/master 처럼 지정한다.
 # 검사 항목
 #   1. 파일 이름 규칙:  V###__설명.sql / R__###_설명.sql  (소문자·숫자·_ 만)
 #   2. 버전 번호 중복 금지
@@ -35,8 +38,12 @@ fi
 # --- 3, 4. 기준(base)과 비교 ---
 if [ "$MODE" = "--staged" ]; then
   BASE="HEAD"
-  DIFF=(git diff --cached --name-status --diff-filter=MDRT HEAD -- "$DIR")
-  ADDED=(git diff --cached --name-only --diff-filter=A HEAD -- "$DIR")
+  BASE_REF="${MIGRATION_BASE_REF:-origin/main}"
+  if git rev-parse --verify -q "$BASE_REF" >/dev/null && git rev-parse --verify -q HEAD >/dev/null; then
+    BASE=$(git merge-base HEAD "$BASE_REF" 2>/dev/null || echo HEAD)
+  fi
+  DIFF=(git diff --cached --name-status --diff-filter=MDRT "$BASE" -- "$DIR")
+  ADDED=(git diff --cached --name-only --diff-filter=A "$BASE" -- "$DIR")
 else
   BASE="$MODE"
   DIFF=(git diff --name-status --diff-filter=MDRT "$BASE"...HEAD -- "$DIR")

@@ -79,3 +79,23 @@ END $$;
 DROP TRIGGER IF EXISTS trg_override_guard ON override;
 CREATE TRIGGER trg_override_guard BEFORE INSERT ON override
     FOR EACH ROW EXECUTE FUNCTION override_guard();
+
+-- =========================================================
+-- 6. 정합성 가드: 코멘트의 호와 코멘트가 달린 페이지의 호가 같아야 한다
+--    (page 는 호를 직접 갖지 않고 조판을 거쳐 호에 이어지므로 외래키로 표현할 수 없다)
+-- =========================================================
+CREATE OR REPLACE FUNCTION guard_comment_page_issue() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.page_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM page pg JOIN layout_run lr ON lr.id = pg.run_id
+             WHERE pg.id = NEW.page_id AND lr.issue_id = NEW.issue_id) THEN
+        RAISE EXCEPTION 'comment: page % does not belong to issue %', NEW.page_id, NEW.issue_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_comment_page_issue ON comment;
+CREATE TRIGGER trg_comment_page_issue BEFORE INSERT OR UPDATE OF issue_id, page_id ON comment
+    FOR EACH ROW EXECUTE FUNCTION guard_comment_page_issue();

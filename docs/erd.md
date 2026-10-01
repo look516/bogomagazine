@@ -42,8 +42,8 @@ flowchart LR
 ```mermaid
 erDiagram
     "issue" ||--o{ "approval" : "issue_id (cascade)"
-    "page" |o--o{ "approval" : "page_id (cascade)"
-    "layout_run" |o--o{ "approval" : "run_id (cascade)"
+    "page" |o--o{ "approval" : "page_id, run_id (cascade)"
+    "layout_run" |o--o{ "approval" : "run_id, issue_id (cascade)"
     "app_user" ||--o{ "approval" : "user_id"
     "app_user" ||--o{ "auth_identity" : "user_id (cascade)"
     "app_user" ||--o{ "comment" : "author_id"
@@ -62,12 +62,12 @@ erDiagram
     "issue" ||--o{ "layout_run" : "issue_id (cascade)"
     "template" ||--o{ "layout_run" : "template_id"
     "issue" ||--o{ "media" : "issue_id (cascade)"
-    "source_post" |o--o{ "media" : "source_post_id (set null)"
+    "source_post" |o--o{ "media" : "source_post_id, issue_id (set null)"
     "app_user" ||--o{ "media" : "uploader_id"
     "media" ||--o{ "media_rendition" : "media_id (cascade)"
     "app_user" ||--o{ "override" : "author_id"
     "issue" ||--o{ "override" : "issue_id (cascade)"
-    "layout_run" ||--o{ "override" : "run_id (cascade)"
+    "layout_run" ||--o{ "override" : "run_id, issue_id (cascade)"
     "page_master" |o--o{ "page" : "master_id"
     "layout_run" ||--o{ "page" : "run_id (cascade)"
     "page" ||--o| "page_lock" : "page_id (cascade)"
@@ -77,22 +77,23 @@ erDiagram
     "page" ||--o{ "placement" : "page_id (cascade)"
     "style" |o--o{ "placement" : "style_id"
     "text_block" |o--o{ "placement" : "text_block_id"
-    "layout_run" ||--o{ "preview" : "run_id (cascade)"
+    "page" ||--o{ "preview" : "run_id, page_no (cascade)"
     "issue" ||--o{ "print_job" : "issue_id"
-    "layout_run" ||--o{ "print_job" : "run_id"
+    "layout_run" ||--o{ "print_job" : "run_id, issue_id"
     "app_user" ||--o{ "print_order" : "ordered_by"
     "print_job" ||--o{ "print_order" : "print_job_id"
     "family_group" ||--o{ "publication" : "group_id"
     "app_user" ||--o{ "publication" : "owner_id"
     "app_user" ||--o{ "social_account" : "user_id"
-    "social_account" |o--o{ "source_post" : "account_id"
+    "social_account" |o--o{ "source_post" : "account_id, contributor_id"
+    "social_account" |o--o{ "source_post" : "account_id, platform"
     "app_user" ||--o{ "source_post" : "contributor_id"
     "issue" ||--o{ "source_post" : "issue_id (cascade)"
     "style" |o--o{ "style" : "based_on"
     "template" ||--o{ "style" : "template_id (cascade)"
     "app_user" |o--o{ "text_block" : "created_by"
     "issue" ||--o{ "text_block" : "issue_id (cascade)"
-    "source_post" |o--o{ "text_block" : "source_post_id (set null)"
+    "source_post" |o--o{ "text_block" : "source_post_id, issue_id (set null)"
     "issue_status_transition"
 ```
 
@@ -428,18 +429,19 @@ erDiagram
 ```mermaid
 erDiagram
     "issue" ||--o{ "media" : "issue_id (cascade)"
-    "source_post" |o--o{ "media" : "source_post_id (set null)"
+    "source_post" |o--o{ "media" : "source_post_id, issue_id (set null)"
     "app_user" ||--o{ "media" : "uploader_id"
     "media" ||--o{ "media_rendition" : "media_id (cascade)"
     "media" |o--o{ "placement" : "media_id"
     "text_block" |o--o{ "placement" : "text_block_id"
     "app_user" ||--o{ "social_account" : "user_id"
-    "social_account" |o--o{ "source_post" : "account_id"
+    "social_account" |o--o{ "source_post" : "account_id, contributor_id"
+    "social_account" |o--o{ "source_post" : "account_id, platform"
     "app_user" ||--o{ "source_post" : "contributor_id"
     "issue" ||--o{ "source_post" : "issue_id (cascade)"
     "app_user" |o--o{ "text_block" : "created_by"
     "issue" ||--o{ "text_block" : "issue_id (cascade)"
-    "source_post" |o--o{ "text_block" : "source_post_id (set null)"
+    "source_post" |o--o{ "text_block" : "source_post_id, issue_id (set null)"
     "media" {
         uuid id PK
         uuid issue_id FK
@@ -484,7 +486,7 @@ erDiagram
         uuid issue_id FK
         uuid contributor_id FK
         uuid account_id FK
-        text platform
+        text platform FK
         text external_post_id
         timestamptz posted_at
         text caption
@@ -524,12 +526,12 @@ erDiagram
 
 ```mermaid
 erDiagram
-    "page" |o--o{ "approval" : "page_id (cascade)"
-    "layout_run" |o--o{ "approval" : "run_id (cascade)"
+    "page" |o--o{ "approval" : "page_id, run_id (cascade)"
+    "layout_run" |o--o{ "approval" : "run_id, issue_id (cascade)"
     "page" |o--o{ "comment" : "page_id (cascade)"
     "issue" ||--o{ "layout_run" : "issue_id (cascade)"
     "template" ||--o{ "layout_run" : "template_id"
-    "layout_run" ||--o{ "override" : "run_id (cascade)"
+    "layout_run" ||--o{ "override" : "run_id, issue_id (cascade)"
     "page_master" |o--o{ "page" : "master_id"
     "layout_run" ||--o{ "page" : "run_id (cascade)"
     "page" ||--o| "page_lock" : "page_id (cascade)"
@@ -537,8 +539,8 @@ erDiagram
     "page" ||--o{ "placement" : "page_id (cascade)"
     "style" |o--o{ "placement" : "style_id"
     "text_block" |o--o{ "placement" : "text_block_id"
-    "layout_run" ||--o{ "preview" : "run_id (cascade)"
-    "layout_run" ||--o{ "print_job" : "run_id"
+    "page" ||--o{ "preview" : "run_id, page_no (cascade)"
+    "layout_run" ||--o{ "print_job" : "run_id, issue_id"
     "layout_run" {
         uuid id PK
         bigint seq
@@ -587,12 +589,13 @@ erDiagram
         uuid id PK
         uuid run_id FK
         bigint override_seq
-        int page_no
+        int page_no FK
         text storage_key
         text status
     }
     "approval" {
         uuid id PK
+        uuid issue_id FK
         uuid page_id FK
         uuid run_id FK
     }
@@ -608,6 +611,7 @@ erDiagram
     }
     "override" {
         uuid id PK
+        uuid issue_id FK
         uuid run_id FK
     }
     "page_lock" {
@@ -618,6 +622,7 @@ erDiagram
     }
     "print_job" {
         uuid id PK
+        uuid issue_id FK
         uuid run_id FK
     }
     "style" {
@@ -639,15 +644,15 @@ erDiagram
 ```mermaid
 erDiagram
     "issue" ||--o{ "approval" : "issue_id (cascade)"
-    "page" |o--o{ "approval" : "page_id (cascade)"
-    "layout_run" |o--o{ "approval" : "run_id (cascade)"
+    "page" |o--o{ "approval" : "page_id, run_id (cascade)"
+    "layout_run" |o--o{ "approval" : "run_id, issue_id (cascade)"
     "app_user" ||--o{ "approval" : "user_id"
     "app_user" ||--o{ "comment" : "author_id"
     "issue" ||--o{ "comment" : "issue_id (cascade)"
     "page" |o--o{ "comment" : "page_id (cascade)"
     "app_user" ||--o{ "override" : "author_id"
     "issue" ||--o{ "override" : "issue_id (cascade)"
-    "layout_run" ||--o{ "override" : "run_id (cascade)"
+    "layout_run" ||--o{ "override" : "run_id, issue_id (cascade)"
     "page" ||--o| "page_lock" : "page_id (cascade)"
     "app_user" ||--o{ "page_lock" : "user_id"
     "approval" {
@@ -710,7 +715,7 @@ erDiagram
 ```mermaid
 erDiagram
     "issue" ||--o{ "print_job" : "issue_id"
-    "layout_run" ||--o{ "print_job" : "run_id"
+    "layout_run" ||--o{ "print_job" : "run_id, issue_id"
     "app_user" ||--o{ "print_order" : "ordered_by"
     "print_job" ||--o{ "print_order" : "print_job_id"
     "print_job" {

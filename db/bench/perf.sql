@@ -82,6 +82,8 @@ INSERT INTO issue (id, publication_id, title, period_start, period_end, close_at
                    min_photos, max_photos, min_pages, max_pages, page_multiple)
 VALUES ('00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-0000000000b1', 'big',
         '2026-07-01', '2026-07-31', now(), '00000000-0000-0000-0000-0000000000a1', 15, 60, 8, 40, 4);
+-- 사진은 그 호의 참여자만 올릴 수 있다
+INSERT INTO issue_member (issue_id, user_id, role) VALUES ('00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-000000000002', 'contributor');
 INSERT INTO media (issue_id, uploader_id, storage_key, sha256, width, height, quality_score, phash, rights_ok)
 SELECT '00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-000000000002', 'x' || s, md5(s::text),
        4000, 3000, 0.1 + random() * 0.9, (random() * 4611686018427387904)::bigint, true

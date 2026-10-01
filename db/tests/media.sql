@@ -66,6 +66,8 @@ BEGIN
                      min_photos, max_photos, min_pages, max_pages, page_multiple)
   VALUES ('00000000-0000-0000-0000-0000000000b1','dups','2026-10-01','2026-10-31', now(),
           '00000000-0000-0000-0000-0000000000a1', 1, 10, 8, 40, 4) RETURNING id INTO v_id;
+  -- 사진은 그 호의 참여자만 올릴 수 있다
+  INSERT INTO issue_member (issue_id, user_id, role) VALUES (v_id, '00000000-0000-0000-0000-000000000002', 'contributor');
   INSERT INTO media (issue_id, uploader_id, storage_key, sha256, width, height, quality_score, phash, rights_ok)
   SELECT v_id, '00000000-0000-0000-0000-000000000002', 'd' || g, 'sha' || g, 4000, 3000, 0.9, 12345, true
     FROM generate_series(1, 5) g;

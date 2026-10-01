@@ -143,6 +143,8 @@ BEGIN
   ASSERT p.submitted_members = 1 AND p.progress_pct = 10, format('T30 제출 후 pct=%s', p.progress_pct);
 
   INSERT INTO app_user (id, name) VALUES ('00000000-0000-0000-0000-000000000003', '관람자');
+  -- 호 참여자는 그 호의 가족 그룹 구성원이어야 하므로 그룹 구성원부터 추가한다
+  INSERT INTO family_member (group_id, user_id, role) VALUES ('00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-000000000003', 'viewer');
   INSERT INTO issue_member (issue_id, user_id, role) VALUES (v_issue, '00000000-0000-0000-0000-000000000003', 'viewer');
   SELECT * INTO p FROM v_issue_progress WHERE issue_id = v_issue;
   ASSERT p.total_members = 2, 'T30 viewer 가 집계에 포함됨';
