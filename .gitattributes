@@ -1,0 +1,10 @@
+# 줄바꿈을 LF 로 고정한다. 이유: 셸 스크립트/훅이 CRLF 가 되면 Linux(CI)에서
+# "set: pipefail: invalid option name" 으로 실패한다 (재현 확인). Windows 의 Git Bash 는 CRLF 를
+# 눈감아 줘서 로컬에서는 드러나지 않고 CI 에서만 터지므로 미리 막아 둔다.
+# (참고: Flyway 체크섬은 줄바꿈과 무관하다 - CRLF 사본으로 validate 가 통과함을 확인했다.)
+* text=auto eol=lf
+*.sql text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+.githooks/* text eol=lf

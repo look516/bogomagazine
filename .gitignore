@@ -28,3 +28,17 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+### 비밀 값 / 로컬 설정 (DB 설계·자동화에서 추가) ###
+# 주의: 이미 git 이 추적 중인 파일(.env)은 이 규칙을 추가해도 추적이 풀리지 않는다 (git rm --cached 필요)
+.env
+.env.*
+!.env.example
+*.local
+.claude/settings.local.json
+
+### 산출물 ###
+Thumbs.db
+*.log
+tmp/
+node_modules/
+__pycache__/

@@ -1,0 +1,39 @@
+# DB 설계 검증 전용 환경 (로컬 + CI 공용). 앱 개발용 docker-compose.yml(gajok_db, 5432)과는 별개다.
+# - 이 DB(포트 5433)는 ./scripts/db.sh 가 쓰며, db.sh reset/test 는 이 DB 만 지운다 (gajok_db 는 건드리지 않는다)
+# - 비밀번호 'dev' 는 로컬 전용이며 운영 값이 아니다
+name: bogomagazine-dbtest
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: pub
+    ports:
+      - "127.0.0.1:5433:5432"      # 로컬 PostgreSQL(5432)과 충돌하지 않도록 5433
+    healthcheck:
+      # -h 127.0.0.1: 초기화 중 임시 서버(소켓만 열림)에 속아 healthy 로 판정되는 것을 막는다
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d pub"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  flyway:
+    image: flyway/flyway:13.8.1    # 버전 고정 (latest 금지: 도구가 몰래 바뀌는 사고 방지)
+    profiles: ["tools"]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./db/migrations:/flyway/sql:ro
+    environment:
+      FLYWAY_URL: jdbc:postgresql://db:5432/pub
+      FLYWAY_USER: postgres
+      FLYWAY_PASSWORD: dev
+      FLYWAY_CLEAN_DISABLED: "true"            # 실수로 DB 를 통째로 지우는 clean 명령 금지
+      FLYWAY_VALIDATE_MIGRATION_NAMING: "true" # 이름 규칙 위반 파일이 있으면 실패
+      FLYWAY_CONNECT_RETRIES: "10"
+      # false 로 두지 않으면 CREATE INDEX CONCURRENTLY 를 쓰는 마이그레이션이 무한 정지한다 (실제로 재현함):
+      # Flyway 의 다른 연결이 트랜잭션을 쥔 채 대기하고, CONCURRENTLY 는 그 트랜잭션이 끝나길 기다리기 때문.
+      # 운영 배포에서도 같은 값을 써야 한다.
+      FLYWAY_POSTGRESQL_TRANSACTIONAL_LOCK: "false"
